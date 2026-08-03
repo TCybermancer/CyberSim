@@ -1,0 +1,9 @@
+Subject: Monthly Budget Report
+
+Hi,
+
+Attached is this month's budget report for review (generated $sent_at).
+Let me know if anything looks off before it goes to accounting.
+
+Thanks,
+Finance

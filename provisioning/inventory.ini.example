@@ -1,0 +1,22 @@
+# Copy to inventory.ini. Every address here MUST be on the OOB
+# management network -- provisioning traffic (SSH/WinRM) never touches
+# the in-band range network. See docs/README.md.
+
+[linux_hosts]
+fin-wks01 ansible_host=10.99.0.41
+fin-wks02 ansible_host=10.99.0.42
+
+[windows_hosts]
+mkt-wks01 ansible_host=10.99.0.51 ansible_connection=winrm ansible_winrm_transport=ntlm ansible_port=5986
+mkt-wks02 ansible_host=10.99.0.52 ansible_connection=winrm ansible_winrm_transport=ntlm ansible_port=5986
+
+[domain_controller]
+dc01 ansible_host=10.99.0.10 ansible_connection=winrm ansible_winrm_transport=ntlm ansible_port=5986
+
+[linux_hosts:vars]
+ansible_user=ansible_svc
+ansible_ssh_private_key_file=~/.ssh/cybersim_provisioning
+
+[windows_hosts:vars]
+ansible_user=svc_provisioning
+ansible_password="{{ vault_provisioning_password }}"

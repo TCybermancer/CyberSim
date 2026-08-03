@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CyberSim orchestrator — install agent</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>CyberSim orchestrator</h1>
+  <a href="./" class="pill pill-unknown" style="text-decoration:none">&larr; dashboard</a>
+</header>
+
+<main style="grid-template-columns: 1fr; max-width: 640px;">
+  <section class="col">
+    <div class="card">
+      <h2>Install the Windows agent</h2>
+      <p class="hint" style="margin-top:0">
+        Downloads a Windows installer pre-linked to <strong id="server-url-display">this server</strong> —
+        its setup wizard opens with the server address, host ID, and persona already filled in below.
+        You can still change anything before finishing the install.
+      </p>
+
+      <form id="download-form" action="/install/agent-bundle" method="get">
+        <label>
+          Host ID <span class="hint">(must match a scenario's "hosts" list on the server)</span>
+          <input id="host-id-input" name="host_id" type="text" placeholder="FIN-WKS03" required>
+        </label>
+        <label>
+          Persona
+          <input id="persona-input" name="persona" type="text" placeholder="finance_analyst" value="default">
+        </label>
+        <button type="submit">Download Windows Agent Installer</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>After downloading</h2>
+      <ol class="hint" style="padding-left:1.1rem; line-height:1.6;">
+        <li>Unzip <code>cybersim-agent-installer.zip</code> and run <code>cybersim-agent-setup.exe</code>.</li>
+        <li>The wizard's "Orchestrator Connection" page opens pre-filled — confirm or edit the values, then finish.</li>
+        <li>The agent registers itself and starts automatically the next time this Windows user logs in
+          (it simulates one logged-in user's activity, so it runs at logon, not as a background service —
+          see docs/README.md). Launch it immediately from the installer's final page if you don't want to wait.</li>
+      </ol>
+      <p class="hint">
+        Prefer a hands-off setup? The zip also works unattended:
+        <code>cybersim-agent-setup.exe /VERYSILENT</code> uses the same pre-filled values with no prompts.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Server-side install</h2>
+      <p class="hint" style="margin-top:0">This page only distributes the Windows agent. To install the orchestrator itself on a new Linux host:</p>
+      <pre class="preview" style="white-space:pre-wrap">docker compose up -d          # server/docker-compose.yml
+# -- or, no Docker --
+sudo ./install.sh              # server/install.sh, installs as a systemd service</pre>
+    </div>
+  </section>
+</main>
+
+<script src="install.js"></script>
+</body>
+</html>

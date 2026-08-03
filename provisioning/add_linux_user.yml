@@ -1,0 +1,60 @@
+---
+# Provision a puppet user account (and optionally the cybersim agent as a
+# systemd service) on a Linux range host.
+#
+# Run this from the control node against the OOB inventory group only --
+# see inventory.ini.example. SSH here rides the OOB NIC, never in-band.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini add_linux_user.yml \
+#     -e "target_user=jsmith target_persona=finance_analyst"
+
+- hosts: linux_hosts
+  become: true
+  vars:
+    target_user: "changeme"
+    target_persona: "generic"
+    agent_install_dir: "/opt/cybersim-agent"
+
+  tasks:
+    - name: Ensure puppet user exists
+      ansible.builtin.user:
+        name: "{{ target_user }}"
+        shell: /bin/bash
+        create_home: true
+        comment: "cybersim puppet ({{ target_persona }})"
+
+    - name: Create agent install directory
+      ansible.builtin.file:
+        path: "{{ agent_install_dir }}"
+        state: directory
+        owner: "{{ target_user }}"
+        mode: "0750"
+
+    - name: Copy agent code
+      ansible.builtin.copy:
+        src: ../agent/
+        dest: "{{ agent_install_dir }}/"
+        owner: "{{ target_user }}"
+
+    # TODO (Claude Code): render config.yaml from a template with this
+    # host's real OOB IP substituted in (see agent/config.yaml.example),
+    # install a venv + requirements.txt, then enable the systemd unit
+    # below.
+
+    - name: Install systemd unit for the cybersim agent
+      ansible.builtin.template:
+        src: templates/cybersim-agent.service.j2
+        dest: /etc/systemd/system/cybersim-agent.service
+      notify: reload systemd
+
+    - name: Enable and start cybersim-agent
+      ansible.builtin.systemd:
+        name: cybersim-agent
+        enabled: true
+        state: started
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true

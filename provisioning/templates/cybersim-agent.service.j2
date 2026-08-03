@@ -1,0 +1,15 @@
+[Unit]
+Description=CyberSim agent ({{ target_persona }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ target_user }}
+WorkingDirectory={{ agent_install_dir }}
+ExecStart={{ agent_install_dir }}/venv/bin/python agent.py --config config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

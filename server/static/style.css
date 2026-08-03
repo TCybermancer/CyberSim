@@ -1,0 +1,181 @@
+:root {
+  --bg: #0f1216;
+  --panel: #171b21;
+  --border: #2a2f38;
+  --text: #e6e9ef;
+  --muted: #8b93a3;
+  --accent: #4f8cff;
+  --ok: #3ecf7e;
+  --warn: #e0a53c;
+  --bad: #e0503c;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --border: #dde1e7;
+    --text: #1a1d23;
+    --muted: #5b6270;
+    color-scheme: light;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
+
+main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+@media (max-width: 860px) {
+  main { grid-template-columns: 1fr; }
+}
+
+.col { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+}
+
+.card h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-header h2 { margin: 0; }
+
+form label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+
+form .row { display: flex; gap: 0.75rem; }
+form .row label { flex: 1; }
+
+input, select, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+button {
+  width: auto;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+}
+
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.hint { color: var(--muted); font-weight: 400; font-size: 0.78rem; }
+
+.preview {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: -0.35rem 0 0.75rem;
+  white-space: pre-wrap;
+}
+
+.preview .alert-step { color: var(--bad); }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: -0.35rem 0 0.75rem; }
+
+.chip {
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+  color: var(--muted);
+  background: transparent;
+  width: auto;
+  margin: 0;
+}
+
+.chip:hover { border-color: var(--accent); color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+th, td { text-align: left; padding: 0.35rem 0.4rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; }
+tbody tr { cursor: default; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { background: rgba(127, 127, 127, 0.08); }
+tbody tr.selected { background: rgba(79, 140, 255, 0.12); }
+
+.result { margin-top: 0.75rem; font-size: 0.82rem; }
+.result.error { color: var(--bad); }
+.result.success { color: var(--ok); }
+
+.pill {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.pill-ok { color: var(--ok); border-color: var(--ok); }
+.pill-bad { color: var(--bad); border-color: var(--bad); }
+.pill-unknown { color: var(--muted); }
+
+.status-pending { color: var(--muted); }
+.status-progress { color: var(--warn); }
+.status-success { color: var(--ok); }
+.status-failure, .status-partial { color: var(--bad); }
+
+.progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+#ledger-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.autorefresh {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0;
+}
+.autorefresh input { width: auto; margin: 0; }

@@ -1,0 +1,57 @@
+# Copy to config.yaml and fill in per-host.
+
+server_url: "http://10.99.0.5:8000"   # orchestrator address on the OOB network
+host_id: "FIN-WKS03"                  # must match the hostname used in scenario 'hosts' list
+os: "windows"                          # "windows" | "linux"
+persona: "finance_analyst"
+poll_interval_seconds: 10
+
+# The local IP address of this host's OOB NIC. All control-plane traffic
+# (registration, polling, ledger reporting) is source-bound to this
+# address so it cannot leak onto the in-band interface. See docs/README.md.
+oob_source_ip: "10.99.0.42"
+
+# Settings for the email_send action module. Points at the puppet mail
+# server in a real range; defaults below match a local MailHog instance
+# (https://github.com/mailhog/MailHog) for testing without a real server:
+#   mailhog -> SMTP on :1025, web UI on :8025 to inspect what was "sent".
+smtp:
+  host: "127.0.0.1"
+  port: 1025
+  from_addr: "cybersim-noreply@corp.local"
+  use_tls: false
+  # username: "svc_cybersim"
+  # password: "changeme"
+  timeout_seconds: 10
+
+# Settings for the web_browse action module. profile_dir holds one
+# persistent Chromium profile per persona (keyed by the `persona` field
+# above) so history/cookies accumulate like a real user's across actions
+# and runs.
+browser:
+  profile_dir: "./browser_profiles"
+  headless: false
+  # channel: "chrome"   # uncomment to drive real installed Chrome instead of bundled Chromium
+
+# Settings for the office_doc action module. LibreOffice's UNO bridge only
+# imports under LibreOffice's own bundled Python, so office_doc.py runs
+# its automation as a subprocess under bundled_python_path -- see that
+# module's docstring. Windows default paths shown; on Linux something
+# like soffice_path: "/usr/bin/soffice", bundled_python_path:
+# "/usr/lib/libreoffice/program/python".
+office:
+  soffice_path: "C:\\Program Files\\LibreOffice\\program\\soffice.exe"
+  # bundled_python_path: derived from soffice_path's directory if omitted
+  documents_dir: "./documents"
+  timeout_seconds: 120
+
+# Settings for the smb_access action module. Leave username/password
+# unset if the puppet host's own account (e.g. domain-joined) already
+# has access to the share -- most real range setups. Set them only if
+# the agent needs to authenticate separately.
+smb:
+  # username: "svc_cybersim"
+  # password: "changeme"
+  local_copy_dir: "./smb_downloads"
+  mount_point: "/mnt/cybersim_smb"   # Linux only
+  net_use_timeout_seconds: 15        # Windows only

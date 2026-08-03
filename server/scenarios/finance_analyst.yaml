@@ -1,0 +1,48 @@
+# Example persona scenario.
+# Values with ranges (e.g. "5-15m") are sampled by the seeded PRNG in
+# scenario_engine.py -- same seed + same file => same resolved schedule.
+
+persona: finance_analyst
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://intranet.corp.local
+      - http://finance-portal.corp.local
+    duration: 5-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 2-10m
+    params:
+      to: hr-puppet@corp.local
+      template: monthly_report
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 1-3m
+    params:
+      app: libreoffice_calc
+      file: budget_q3.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 5-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 1-4m
+    params:
+      share: "\\\\fileserver01\\finance"
+      ops: [browse, copy_file]
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

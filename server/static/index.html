@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CyberSim orchestrator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>CyberSim orchestrator</h1>
+  <a href="install.html" class="pill pill-unknown" style="text-decoration:none">install agent &rarr;</a>
+  <div id="health" class="pill pill-unknown">checking server&hellip;</div>
+</header>
+
+<main>
+  <section class="col">
+    <div class="card">
+      <h2>Launch a run</h2>
+      <form id="launch-form">
+        <label>
+          Scenario
+          <select id="scenario-select" required></select>
+        </label>
+
+        <div id="scenario-preview" class="preview"></div>
+
+        <label>
+          Hosts <span class="hint">(comma-separated; click a known host below to add it)</span>
+          <input id="hosts-input" type="text" placeholder="FIN-WKS03, FIN-WKS04" required>
+        </label>
+        <div id="known-hosts" class="chip-row"></div>
+
+        <div class="row">
+          <label>
+            Seed <span class="hint">(optional &mdash; omit for distributional mode)</span>
+            <input id="seed-input" type="number" placeholder="e.g. 42">
+          </label>
+          <label>
+            Start time <span class="hint">(optional &mdash; defaults to now)</span>
+            <input id="start-input" type="datetime-local">
+          </label>
+        </div>
+
+        <button type="submit">Launch run</button>
+      </form>
+      <div id="launch-result" class="result"></div>
+    </div>
+
+    <div class="card">
+      <h2>Registered agents</h2>
+      <table id="agents-table">
+        <thead><tr><th>host</th><th>os</th><th>persona</th><th>last seen</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="col">
+    <div class="card">
+      <h2>Runs</h2>
+      <table id="runs-table">
+        <thead><tr><th>run</th><th>scenario</th><th>seed</th><th>started</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Ledger <span id="ledger-run-id" class="hint"></span></h2>
+        <label class="autorefresh">
+          <input type="checkbox" id="autorefresh-toggle" checked>
+          auto-refresh
+        </label>
+      </div>
+      <div id="ledger-progress" class="progress"><div id="ledger-progress-bar"></div></div>
+      <table id="ledger-table">
+        <thead><tr><th>action</th><th>type</th><th>host</th><th>intended start</th><th>status</th><th>artifact</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="ledger-empty" class="hint">Select a run above to view its ledger.</p>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

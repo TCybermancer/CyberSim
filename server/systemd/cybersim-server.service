@@ -1,0 +1,17 @@
+[Unit]
+Description=CyberSim orchestrator server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cybersim
+Group=cybersim
+WorkingDirectory=/opt/cybersim-server
+Environment=CYBERSIM_DB_PATH=/var/lib/cybersim-server/cybersim.db
+ExecStart=/opt/cybersim-server/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

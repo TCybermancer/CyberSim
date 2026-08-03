@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+config.yaml
+inventory.ini
+server/cybersim.db
+
+# runtime artifacts the action modules create by default
+agent/browser_profiles/
+agent/documents/
+agent/smb_downloads/
+
+# PyInstaller/Inno Setup build intermediates -- rebuild via
+# `pyinstaller cybersim-agent.spec` then `iscc installer/cybersim-agent.iss`
+# (see docs/README.md). server/install_artifacts/cybersim-agent-setup.exe
+# is NOT ignored -- that's the checked-in copy the download page serves.
+agent/build/
+agent/dist/
+agent/installer/output/

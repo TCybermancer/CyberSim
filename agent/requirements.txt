@@ -1,0 +1,7 @@
+requests>=2.31
+pyyaml>=6.0
+pydantic>=2.6
+playwright>=1.42          # web_browse -- also run `playwright install chromium` after pip install
+
+# Uncomment as remaining real action modules are implemented:
+# pysmb>=1.2.9              # smb_access on hosts without a native mount
