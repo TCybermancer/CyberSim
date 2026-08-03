@@ -110,6 +110,30 @@ def pending_actions_for_host(host: str, now: str) -> list[dict]:
         return ready
 
 
+def active_runs_for_hosts(hosts: list[str]) -> dict[str, str]:
+    """Maps host -> run_id for any host that still has action_specs with
+    no completion_record (either never dispatched, or dispatched but not
+    yet reported done). Used to block launching a second run against a
+    host that's still mid-run -- actions from two runs interleaving on
+    one host would make alert-to-action attribution in the scoring
+    harness ambiguous (see scoring/matcher.py), since nothing records
+    which run an alert should count against once that's happened."""
+    if not hosts:
+        return {}
+    with get_conn() as conn:
+        placeholders = ",".join("?" * len(hosts))
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT a.host, a.run_id
+            FROM action_specs a
+            LEFT JOIN completion_records c ON a.action_id = c.action_id
+            WHERE a.host IN ({placeholders}) AND (a.dispatched = 0 OR c.action_id IS NULL)
+            """,
+            hosts,
+        ).fetchall()
+        return {r["host"]: r["run_id"] for r in rows}
+
+
 def save_intent(action_id: str, payload: dict):
     with get_conn() as conn:
         conn.execute(

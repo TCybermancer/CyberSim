@@ -87,6 +87,7 @@ class AgentRegistration(BaseModel):
     os: str  # "windows" | "linux"
     persona: Optional[str] = None
     agent_version: str = "0.1.0"
+    client_time: Optional[datetime] = None  # for server-side clock-drift detection
 
 
 class PollResponse(BaseModel):

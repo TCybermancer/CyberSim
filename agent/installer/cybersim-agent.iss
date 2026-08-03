@@ -86,6 +86,20 @@ begin
   ConnectionPage.Values[2] := GetDefault(2, 'default');
 end;
 
+function YamlEscape(const S: String): String;
+begin
+  { Escapes for embedding in a double-quoted YAML scalar. Defense in
+    depth: server/app.py already restricts host_id/persona to a safe
+    charset before they ever reach install-defaults.txt, but this file
+    could in principle be hand-edited or the wizard filled in by hand,
+    so this doesn't assume that validation already happened. Order
+    matters -- backslashes first, or a quote's own escaping backslash
+    would itself get re-escaped. }
+  Result := S;
+  StringChangeEx(Result, '\', '\\', True);
+  StringChangeEx(Result, '"', '\"', True);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigLines: TArrayOfString;
@@ -93,10 +107,10 @@ begin
   if CurStep = ssPostInstall then
   begin
     SetArrayLength(ConfigLines, 5);
-    ConfigLines[0] := 'server_url: "' + ConnectionPage.Values[0] + '"';
-    ConfigLines[1] := 'host_id: "' + ConnectionPage.Values[1] + '"';
+    ConfigLines[0] := 'server_url: "' + YamlEscape(ConnectionPage.Values[0]) + '"';
+    ConfigLines[1] := 'host_id: "' + YamlEscape(ConnectionPage.Values[1]) + '"';
     ConfigLines[2] := 'os: "windows"';
-    ConfigLines[3] := 'persona: "' + ConnectionPage.Values[2] + '"';
+    ConfigLines[3] := 'persona: "' + YamlEscape(ConnectionPage.Values[2]) + '"';
     ConfigLines[4] := 'poll_interval_seconds: 10';
     SaveStringsToFile(ExpandConstant('{app}\config.yaml'), ConfigLines, False);
   end;

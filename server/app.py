@@ -34,7 +34,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -58,8 +58,19 @@ def startup():
 
 @app.post("/agents/register")
 def register_agent(reg: AgentRegistration):
-    db.upsert_agent(reg.host, reg.os, reg.persona, datetime.utcnow().isoformat())
-    return {"status": "registered", "host": reg.host}
+    now = datetime.utcnow()
+    db.upsert_agent(reg.host, reg.os, reg.persona, now.isoformat())
+
+    response = {"status": "registered", "host": reg.host}
+    if reg.client_time is not None:
+        # Alert-to-action matching in the scoring harness (see
+        # scoring/matcher.py) leans on host and server clocks agreeing
+        # closely enough for the time-window heuristic to mean anything.
+        # Drift silently corrupts that with no error anywhere, so it's
+        # worth surfacing here at the one point a host's own clock and
+        # the server's are directly comparable.
+        response["clock_drift_seconds"] = (now - reg.client_time).total_seconds()
+    return response
 
 
 @app.get("/agents/{host}/poll", response_model=PollResponse)
@@ -95,6 +106,17 @@ def start_run(req: RunRequest):
         scenario = load_scenario(SCENARIOS_DIR / f"{req.scenario_name}.yaml")
     except FileNotFoundError:
         raise HTTPException(404, f"scenario '{req.scenario_name}' not found")
+
+    # A host mid-run (has action_specs with no completion_record yet)
+    # can't safely take a second run: once two runs' actions interleave
+    # on one host, an alert has no way to say which run it belongs to.
+    busy = db.active_runs_for_hosts(req.hosts)
+    if busy:
+        raise HTTPException(
+            409,
+            "these hosts still have an active run and can't start another until "
+            f"it finishes: {busy}",
+        )
 
     start_time = req.start_time or datetime.utcnow()
     run_id, seed_used, specs = resolve(scenario, req.hosts, start_time, req.seed)
@@ -149,8 +171,15 @@ def list_runs():
     return {"runs": db.list_runs()}
 
 
+_SAFE_TOKEN = r"^[A-Za-z0-9._-]{0,64}$"
+
+
 @app.get("/install/agent-bundle")
-def download_agent_bundle(request: Request, host_id: str = "", persona: str = "default"):
+def download_agent_bundle(
+    request: Request,
+    host_id: str = Query(default="", pattern=_SAFE_TOKEN),
+    persona: str = Query(default="default", pattern=_SAFE_TOKEN),
+):
     """Zips the pre-built Windows agent installer with a per-request
     install-defaults.txt sidecar file -- server_url taken from *this
     request's own* base URL, plus the given host_id/persona -- so the
@@ -158,6 +187,16 @@ def download_agent_bundle(request: Request, host_id: str = "", persona: str = "d
     needing to rebuild or re-sign the installer per request. See
     agent/installer/cybersim-agent.iss for how the installer's wizard
     reads this file.
+
+    host_id/persona are restricted to a safe charset (rather than just
+    escaped) because this endpoint is unauthenticated -- anyone who can
+    reach it controls what ends up here, and it flows into another
+    process's string-concatenated YAML (the installer's Pascal script).
+    A value with an embedded quote/newline could otherwise inject
+    arbitrary config.yaml content on whoever runs the installer. The
+    installer also escapes defensively on its side (see
+    cybersim-agent.iss's YamlEscape) in case this sidecar file is ever
+    hand-edited instead of generated here.
 
     install_artifacts/cybersim-agent-setup.exe is a checked-in build
     artifact, not built by this server -- rebuild it (PyInstaller, then

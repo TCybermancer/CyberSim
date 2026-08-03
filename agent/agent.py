@@ -28,6 +28,8 @@ import yaml
 from actions import run_action
 from models import AgentRegistration, CompletionRecord, IntentRecord
 
+CLOCK_DRIFT_WARN_SECONDS = 5.0
+
 
 def _default_config_path() -> str:
     """config.yaml next to the executable when packaged (PyInstaller sets
@@ -91,11 +93,24 @@ def main():
 
     session = bound_session(oob_ip)
 
-    session.post(
+    reg_resp = session.post(
         f"{server_url}/agents/register",
-        json=AgentRegistration(host=host_id, os=os_name, persona=persona).model_dump(mode="json"),
+        json=AgentRegistration(
+            host=host_id, os=os_name, persona=persona, client_time=datetime.utcnow()
+        ).model_dump(mode="json"),
     )
     print(f"[agent] registered as {host_id} ({os_name}, persona={persona})")
+    try:
+        drift = reg_resp.json().get("clock_drift_seconds")
+    except ValueError:
+        drift = None
+    if drift is not None and abs(drift) > CLOCK_DRIFT_WARN_SECONDS:
+        # The whole ground-truth/scoring model leans on host and server
+        # clocks agreeing closely enough that alert-to-action time-window
+        # matching (see scoring/matcher.py) actually means something --
+        # drift here silently corrupts that without ever raising an
+        # error, so surface it loudly instead.
+        print(f"[agent] WARNING: clock drift from server is {drift:.1f}s -- sync this host's clock")
 
     while True:
         try:
