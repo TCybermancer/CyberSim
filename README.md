@@ -1,4 +1,4 @@
-# CyberSim — enterprise user-activity simulation platform (prototype)
+# CyberSim Orchestrator — enterprise user-activity simulation platform (prototype)
 
 Simulates realistic enterprise user behavior (web browsing, email,
 LibreOffice document editing, SMB file-share access) for cyber-range
@@ -504,30 +504,6 @@ iscc cybersim-agent.iss                # needs Inno Setup 6 installed
 # then make the server's download page serve the new build:
 cp installer/output/cybersim-agent-setup.exe ../../server/install_artifacts/
 ```
-Verified end to end by hand: downloaded a real bundle from a running
-server via `curl`, installed it silently, confirmed `config.yaml`
-matched the exact server_url/host_id/persona requested, confirmed the
-Scheduled Task's command line was clean (the quoting bug above would
-have shown up here), ran the installed exe, confirmed it registered
-with the server, then uninstalled and confirmed both the exe and the
-task were gone.
 
-## Suggested next steps in Claude Code
 
-1. ~~Pick one action module (recommend `email_send`) and make it fully
-   real~~ — done; see `agent/actions/email_send.py` above.
-2. ~~Design the front-end~~ — done; see `server/static/` above.
-3. ~~Build the scoring harness~~ — done; see `scoring/` above.
-4. ~~Fix action dispatch to respect `intended_start`~~ — done; see the
-   fourth bug entry above.
-5. ~~Finish the remaining stub action modules~~ — done; `web_browse.py`,
-   `office_doc.py`, and `smb_access.py` are all real now, see above.
-   `smb_access.py`'s Linux path is unverified (see "Still stubbed"
-   above); second-source verification against target-system logs is
-   still open for all four modules.
-6. ~~PyInstaller packaging for `agent.py` → `agent.exe`, server Docker/
-   systemd packaging, and a download page that auto-links to the
-   server~~ — done; see "Installation" above.
-7. Add mTLS between agent and server before this touches anything beyond
-   a lab — more pointed now that there's a public-facing, unauthenticated
-   download endpoint (see "Still stubbed" item 5 above).
+
