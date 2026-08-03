@@ -18,7 +18,13 @@
 ; not a background service. See docs/README.md.
 
 #define MyAppName "CyberSim Agent"
-#define MyAppVersion "0.1.0"
+; #ifndef, not a plain #define, so CI can pass a version derived from
+; the git tag (e.g. `iscc /DMyAppVersion=1.2.3 cybersim-agent.iss`)
+; without this line's own #define conflicting with it -- see
+; .github/workflows/release.yml. Local manual builds keep this default.
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.0"
+#endif
 #define MyAppExeName "cybersim-agent.exe"
 
 [Setup]

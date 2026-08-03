@@ -249,6 +249,11 @@ out in real execution time the way their `intended_start` implies --
   Inno Setup) and `GET /install/agent-bundle` (the auto-linking download
   page at `/ui/install.html`). See "Installation" below — all four paths
   verified by hand end to end, not just written.
+- Automated tests (`server/tests/`, `scoring/tests/`, `agent/tests/`,
+  70 tests) and CI (`.github/workflows/`) — see "Testing" and "CI /
+  Releases" below for scope (full coverage for `server`/`scoring`; agent
+  action modules covered for OS-portable logic only, real
+  browser/Office/SMB driving stays hand-verified).
 
 **Six bugs fixed along the way, worth knowing about if you're touching
 these files:**
@@ -331,7 +336,7 @@ these files:**
 1. Auth between agent and server (mTLS recommended given this is
    effectively a benign C2 channel — treat it with the same rigor). More
    pointed now that there's a public-facing download page — see
-   "Installation" above.
+   "Installation" below.
 2. Config templating in the Ansible playbooks (currently a TODO comment
    — needs to render `config.yaml` per-host with the right OOB IP). Linux
    puppet hosts are provisioned this way (Ansible + systemd, no packaged
@@ -352,6 +357,12 @@ these files:**
    run, registers a working agent against it. Fine for a lab; worth
    locking down (same auth story as item 1) before this touches anything
    more exposed.
+6. The automated test suite (see "Testing" below) doesn't cover actually
+   driving a real browser, LibreOffice, or SMB share -- CI would need a
+   real LibreOffice install, a downloaded Chromium, and a real or
+   loopback SMB share to exercise those, which is a heavier CI setup
+   than was worth building for the initial suite. Those paths stay
+   hand-verified for now (see each action module's entry above).
 
 ## Running the prototype locally (single machine, no real OOB yet)
 
@@ -451,11 +462,12 @@ with no prompts, for scripted provisioning.
 
 How the auto-link works: `GET /install/agent-bundle?host_id=...&persona=...`
 (`server/app.py`) zips the pre-built installer
-(`server/install_artifacts/cybersim-agent-setup.exe`, a checked-in build
-artifact -- rebuild instructions below) together with a freshly generated
-`install-defaults.txt` sidecar file, one line each for server_url (taken
-from *that request's own* base URL -- whatever address reached the
-server is what the agent should reach it at too), host_id, and persona.
+(`server/install_artifacts/cybersim-agent-setup.exe` -- **not** checked
+into git, see "CI / Releases" below for where it comes from) together
+with a freshly generated `install-defaults.txt` sidecar file, one line
+each for server_url (taken from *that request's own* base URL --
+whatever address reached the server is what the agent should reach it at
+too), host_id, and persona.
 The installer (`agent/installer/cybersim-agent.iss`, Inno Setup) reads
 that sidecar file, if present next to `Setup.exe`, to pre-fill its
 custom wizard page. The installer binary itself is static and never
@@ -489,7 +501,9 @@ this, worth knowing if you touch `cybersim-agent.iss`:
   Ansible provisioning's own elevated pattern (`become: true` / admin
   WinRM) for puppet host setup regardless.
 
-**Rebuilding the agent installer** (after any agent code change):
+**Rebuilding the agent installer by hand** (after any agent code change,
+if you're not relying on CI -- see "CI / Releases" below for the
+automated version):
 ```bash
 cd agent
 pip install pyinstaller
@@ -505,5 +519,58 @@ iscc cybersim-agent.iss                # needs Inno Setup 6 installed
 cp installer/output/cybersim-agent-setup.exe ../../server/install_artifacts/
 ```
 
+### Testing
 
+```bash
+# server + scoring (pure Python, no browser/Office/SMB dependency)
+pip install -r server/requirements.txt -r scoring/requirements.txt pytest httpx
+pytest server/tests scoring/tests -v
 
+# agent (OS-portable logic only -- see below for what's excluded)
+pip install -r agent/requirements.txt pytest
+pytest agent/tests -v
+```
+Run from the repo root; each of `server/`, `scoring/`, `agent/` has its
+own `conftest.py` doing the sys.path setup needed for that component's
+own import convention (flat for server/agent, package-relative for
+scoring -- see each conftest.py for why). `server/tests` uses an
+isolated throwaway SQLite DB per test (never touches a real
+`cybersim.db`) and FastAPI's `TestClient` against the real API, so it
+covers real bugs found this way earlier: the dispatch-timing fix, the
+`os`/`persona`-clobbering bug, the concurrent-run guard, and the
+install-bundle input validation.
+
+**What's covered vs. not**: `scenario_engine`, `db`, `app`'s API surface,
+and `scoring`'s matching/scoring logic are fully unit-tested. The agent
+action modules are unit-tested only for their OS-portable pieces --
+template rendering (`email_send`, `smtplib` mocked), local file-copy
+helpers (`smb_access`, real temp-dir I/O), resource-path resolution
+(`_bundle`), and the `PLAYWRIGHT_BROWSERS_PATH` fix (`web_browse`).
+Actually driving a real browser, real LibreOffice, or a real SMB share
+is *not* covered by this suite -- those were verified by hand (see each
+module's entry above) and would need a much heavier CI setup (a real
+LibreOffice install, a downloaded Chromium, a real or loopback SMB
+share) to automate. Worth doing eventually; out of scope for now.
+
+### CI / Releases
+
+`.github/workflows/test.yml` runs the suite above on every push/PR to
+`main` (`ubuntu-latest` -- fast, and nothing in the covered scope needs
+Windows).
+
+`.github/workflows/release.yml` runs on `windows-latest`, triggered by
+pushing a tag matching `v*.*.*` (or manually via workflow_dispatch):
+builds the agent exe and installer exactly like the by-hand steps above,
+derives the installer's version from the tag (`cybersim-agent.iss`'s
+`#define MyAppVersion` is `#ifndef`-guarded so `iscc
+/DMyAppVersion=X.Y.Z` can override it without editing the file --
+verified locally that the version string actually lands in the compiled
+binary, not just that it compiles), uploads the build as a workflow
+artifact always, and additionally attaches it to a GitHub Release when
+triggered by a real tag. Grab the latest release's
+`cybersim-agent-setup.exe` and place it at
+`server/install_artifacts/cybersim-agent-setup.exe` (or build it
+yourself per above) before `/install/agent-bundle` has anything to
+serve -- that file is `.gitignore`d on purpose now: a checked-in binary
+grows the repo forever since git can't meaningfully diff it, and this
+already tripped GitHub's 50MB size warning twice.

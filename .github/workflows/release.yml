@@ -1,0 +1,61 @@
+name: Release Windows Agent Installer
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # softprops/action-gh-release needs to create a release
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install agent dependencies
+        working-directory: agent
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build agent executable
+        working-directory: agent
+        run: pyinstaller cybersim-agent.spec
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Determine version from tag
+        id: version
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build installer
+        working-directory: agent
+        shell: cmd
+        run: iscc /DMyAppVersion=${{ steps.version.outputs.version }} installer\cybersim-agent.iss
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cybersim-agent-setup
+          path: agent/installer/output/cybersim-agent-setup.exe
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agent/installer/output/cybersim-agent-setup.exe
+          generate_release_notes: true

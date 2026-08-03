@@ -13,8 +13,19 @@ agent/smb_downloads/
 
 # PyInstaller/Inno Setup build intermediates -- rebuild via
 # `pyinstaller cybersim-agent.spec` then `iscc installer/cybersim-agent.iss`
-# (see docs/README.md). server/install_artifacts/cybersim-agent-setup.exe
-# is NOT ignored -- that's the checked-in copy the download page serves.
+# (see docs/README.md), or grab the latest build from GitHub Releases.
 agent/build/
 agent/dist/
 agent/installer/output/
+
+# No longer checked in -- committing a ~50MB binary every rebuild grows
+# the repo forever, since git can't meaningfully diff binaries (this
+# already tripped GitHub's 50MB size warning twice). CI
+# (.github/workflows/release.yml) attaches a fresh build to a GitHub
+# Release on every version tag instead -- download the latest one and
+# place it here, or build it yourself, before /install/agent-bundle can
+# serve it. See docs/README.md "Installation".
+server/install_artifacts/*.exe
+
+# pytest
+.pytest_cache/

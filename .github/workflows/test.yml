@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  server-and-scoring:
+    # server/, scoring/ are pure Python (no browser/Office/SMB
+    # dependency), so ubuntu-latest is enough and cheaper than a
+    # Windows runner -- see agent job below for why that one differs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r server/requirements.txt
+          pip install -r scoring/requirements.txt
+          pip install pytest httpx
+      - name: Run tests
+        run: pytest server/tests scoring/tests -v
+
+  agent:
+    # The tests here only cover OS-portable logic (template rendering,
+    # local file-copy helpers, resource-path resolution, the
+    # PLAYWRIGHT_BROWSERS_PATH fix) -- real browser/Office/SMB driving
+    # is verified by hand, not here (see docs/README.md). That portable
+    # scope is exactly why this can run on ubuntu-latest too: importing
+    # `playwright` only needs the pip package, not a downloaded browser
+    # binary, since nothing here actually launches one.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r agent/requirements.txt
+          pip install pytest
+      - name: Run tests
+        run: pytest agent/tests -v
