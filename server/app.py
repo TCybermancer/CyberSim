@@ -779,10 +779,10 @@ def download_agent_bundle(
     cybersim-agent.iss's YamlEscape) in case this sidecar file is ever
     hand-edited instead of generated here.
 
-    install_artifacts/cybersim-agent-setup.exe is a checked-in build
-    artifact, not built by this server -- rebuild it (PyInstaller, then
-    `iscc installer/cybersim-agent.iss` from agent/) whenever agent code
-    changes, and copy the result here. See docs/README.md.
+    install_artifacts/cybersim-agent-setup.exe is a build artifact, not
+    built by this server. Release CI embeds its Windows installer in the
+    published server image; source deployments must build or download it
+    separately and copy it here. See docs/README.md.
     """
     installer_path = INSTALL_ARTIFACTS_DIR / AGENT_INSTALLER_NAME
     if not installer_path.exists():

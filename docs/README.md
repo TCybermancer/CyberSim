@@ -483,30 +483,32 @@ one, not both.
 
 **Docker** (`server/Dockerfile`, `server/docker-compose.yml`):
 
-CyberSim does not currently publish a prebuilt server container image.
-Docker Compose builds the image locally from the repository, so clone the
-repository (recommended) or download and extract GitHub's source ZIP first.
+The prebuilt Linux/amd64 image is published at
+`ghcr.io/tcybermancer/cybersim-server:latest`. For Compose, download the
+single compose file; the rest of the repository is not required.
 
 ```bash
-git clone https://github.com/TCybermancer/CyberSim.git
-cd CyberSim/server
-docker compose up -d --build   # builds cybersim-server:latest and runs it
+mkdir cybersim-server && cd cybersim-server
+curl -LO https://raw.githubusercontent.com/TCybermancer/CyberSim/main/server/docker-compose.yml
+export CYBERSIM_ADMIN_PASSWORD='replace-with-a-long-random-password'
+docker compose pull
+docker compose up -d
 ```
 
-To update an existing clone later:
+To update later:
 
 ```bash
-cd CyberSim
-git pull
-cd server
-docker compose up -d --build
+cd cybersim-server
+export CYBERSIM_ADMIN_PASSWORD='the-same-password-or-a-new-one'
+docker compose pull
+docker compose up -d
 ```
 
-You do not need to download the files individually. If Git is unavailable,
-use GitHub's **Code > Download ZIP**, extract it, then run
-`docker compose up -d --build` from the extracted `CyberSim/server`
-directory. A future GHCR/Docker Hub release could support `docker pull`, but
-there is no published server image to pull today.
+For a one-command deployment without Compose, create a named volume and use
+`docker run -d --name cybersim-server --restart unless-stopped -p 8000:8000
+-v cybersim-data:/data -e CYBERSIM_ADMIN_PASSWORD='replace-me'
+ghcr.io/tcybermancer/cybersim-server:latest`. Building from source remains
+available with `docker build -t cybersim-server:local server` from a clone.
 
 The SQLite DB lives at `/data` inside the container (`CYBERSIM_DB_PATH`,
 read by `db.py`), backed by a named volume so it survives container
@@ -710,16 +712,19 @@ share) to automate. Worth doing eventually; out of scope for now.
 `main` (`ubuntu-latest` -- fast, and nothing in the covered scope needs
 Windows).
 
-`.github/workflows/release.yml` runs on `windows-latest`, triggered by
-pushing a tag matching `v*.*.*` (or manually via workflow_dispatch):
-builds the agent exe and installer exactly like the by-hand steps above,
+`.github/workflows/release.yml` runs after pushes to `main`, version tags,
+or manual dispatch. Its Windows job builds the agent exe and installer
+exactly like the by-hand steps above,
 derives the installer's version from the tag (`cybersim-agent.iss`'s
 `#define MyAppVersion` is `#ifndef`-guarded so `iscc
 /DMyAppVersion=X.Y.Z` can override it without editing the file --
 verified locally that the version string actually lands in the compiled
 binary, not just that it compiles), uploads the build as a workflow
 artifact always, and additionally attaches it to a GitHub Release when
-triggered by a real tag. Grab the latest release's
+triggered by a real tag. A dependent Linux job embeds that same installer
+in the server image and publishes `ghcr.io/tcybermancer/cybersim-server`
+with `latest`, commit-SHA, and (for releases) semantic-version tags. Source
+deployments can grab the latest release's
 `cybersim-agent-setup.exe` and place it at
 `server/install_artifacts/cybersim-agent-setup.exe` (or build it
 yourself per above) before `/install/agent-bundle` has anything to
