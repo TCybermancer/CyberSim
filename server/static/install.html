@@ -2,18 +2,36 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CyberSim orchestrator — install agent</title>
-<link rel="stylesheet" href="style.css">
+<script>
+(function () {
+  var t = localStorage.getItem("cybersim-theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 <header>
   <h1>CyberSim orchestrator</h1>
   <a href="./" class="pill pill-unknown" style="text-decoration:none">&larr; dashboard</a>
+  <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
+  <span id="whoami-pill" class="pill pill-unknown"></span>
+  <button type="button" id="logout-btn" class="pill pill-unknown">log out</button>
 </header>
 
 <main style="grid-template-columns: 1fr; max-width: 640px;">
   <section class="col">
-    <div class="card">
+    <div class="card" id="viewer-blocked-card" style="display:none">
+      <h2>Admin access required</h2>
+      <p class="hint" style="margin-top:0">
+        Installing an agent mints a live credential for it, so only admin accounts can do this.
+        Ask an admin to run this for you, or to create you an admin account.
+      </p>
+    </div>
+
+    <div class="card" id="download-card">
       <h2>Install the Windows agent</h2>
       <p class="hint" style="margin-top:0">
         Downloads a Windows installer pre-linked to <strong id="server-url-display">this server</strong> —
@@ -59,6 +77,8 @@ sudo ./install.sh              # server/install.sh, installs as a systemd servic
   </section>
 </main>
 
-<script src="install.js"></script>
+<script src="theme.js?v=1"></script>
+<script src="auth.js?v=2"></script>
+<script src="install.js?v=3"></script>
 </body>
 </html>

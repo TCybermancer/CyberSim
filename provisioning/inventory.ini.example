@@ -11,7 +11,19 @@ mkt-wks01 ansible_host=10.99.0.51 ansible_connection=winrm ansible_winrm_transpo
 mkt-wks02 ansible_host=10.99.0.52 ansible_connection=winrm ansible_winrm_transport=ntlm ansible_port=5986
 
 [domain_controller]
-dc01 ansible_host=10.99.0.10 ansible_connection=winrm ansible_winrm_transport=ntlm ansible_port=5986
+# build_domain_controller.yml (provisioning/) registers the newly-cloned DC
+# here itself, in-memory, once its OOB NIC gets a DHCP lease -- nothing
+# needs to be added here by hand for a fresh build. Only pre-existing DCs
+# you're managing outside that playbook need a static line like this one:
+# dc01 ansible_host=10.99.0.10 ansible_connection=winrm ansible_winrm_transport=ntlm ansible_port=5986
+
+[esxi]
+# SSH to the ESXi host itself for the handful of things community.vmware
+# has no module for (vim-cmd vmsvc/markastemplate -- see
+# roles/dc_template_prep). Not a range host; management-plane only.
+# Host is named differently from the group to avoid Ansible's
+# "found both group and host with same name" warning.
+esxi-host ansible_host="{{ esxi_hostname }}" ansible_connection=ssh ansible_user="{{ esxi_username }}" ansible_password="{{ esxi_password }}" ansible_python_interpreter=/bin/python
 
 [linux_hosts:vars]
 ansible_user=ansible_svc

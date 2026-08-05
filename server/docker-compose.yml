@@ -13,6 +13,11 @@ services:
       - cybersim-data:/data
       # Uncomment to edit scenarios without rebuilding the image:
       # - ./scenarios:/app/scenarios
+    environment:
+      # Pins the dashboard admin password (see docs/README.md's "Auth"
+      # section) -- otherwise a random one is generated on first startup
+      # and only ever shown once, in the container's own logs.
+      - CYBERSIM_ADMIN_PASSWORD=change-me
     restart: unless-stopped
 
 volumes:

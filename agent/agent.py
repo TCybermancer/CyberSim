@@ -90,8 +90,16 @@ def main():
     persona = cfg.get("persona")
     poll_interval = cfg.get("poll_interval_seconds", 10)
     oob_ip = cfg.get("oob_source_ip")
+    token = cfg.get("token")
 
     session = bound_session(oob_ip)
+    if token:
+        # Every server call below reuses this session, so setting it once
+        # here covers register/poll/ledger -- see server/auth.py for what
+        # the server checks it against.
+        session.headers["Authorization"] = f"Bearer {token}"
+    else:
+        print("[agent] WARNING: no token in config.yaml -- the server will reject every call")
 
     reg_resp = session.post(
         f"{server_url}/agents/register",
@@ -99,6 +107,13 @@ def main():
             host=host_id, os=os_name, persona=persona, client_time=datetime.utcnow()
         ).model_dump(mode="json"),
     )
+    if not reg_resp.ok:
+        # Unlike poll (below), a failed register has no retry loop around
+        # it -- surface this clearly and stop, rather than silently
+        # limping into a poll loop that will just fail the same way
+        # forever with a less obvious error each time.
+        print(f"[agent] registration failed ({reg_resp.status_code}): {reg_resp.text}")
+        sys.exit(1)
     print(f"[agent] registered as {host_id} ({os_name}, persona={persona})")
     try:
         drift = reg_resp.json().get("clock_drift_seconds")

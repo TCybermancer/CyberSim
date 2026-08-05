@@ -4,9 +4,17 @@
 
 document.getElementById("server-url-display").textContent = window.location.origin;
 
+(async function gateForRole() {
+  const user = await setupWhoami();
+  if (user && user.role !== "admin") {
+    document.getElementById("download-card").style.display = "none";
+    document.getElementById("viewer-blocked-card").style.display = "";
+  }
+})();
+
 (async function suggestHostIds() {
   try {
-    const res = await fetch("/agents");
+    const res = await authedFetch("/agents");
     if (!res.ok) return;
     const { agents } = await res.json();
     if (!agents.length) return;

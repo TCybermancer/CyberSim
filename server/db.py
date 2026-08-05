@@ -52,6 +52,49 @@ CREATE TABLE IF NOT EXISTS agents (
     persona TEXT,
     last_seen TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS schedules (
+    schedule_id TEXT PRIMARY KEY,
+    scenario_name TEXT NOT NULL,
+    hosts TEXT NOT NULL,             -- JSON list
+    interval_seconds INTEGER NOT NULL,
+    next_run_at TEXT NOT NULL,
+    seed INTEGER,                    -- NULL = distributional mode each fire
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    last_run_id TEXT                 -- most recent run_id this schedule produced, or NULL
+);
+
+-- One bearer token per host, minted the first time /install/agent-bundle
+-- is downloaded for that host_id and reused on subsequent downloads (see
+-- app.py) so re-downloading the bundle for troubleshooting doesn't
+-- silently invalidate an already-installed agent's credential.
+CREATE TABLE IF NOT EXISTS agent_tokens (
+    host TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    issued_at TEXT NOT NULL
+);
+
+-- Dashboard accounts. role is enforced in Python (see auth.py/app.py),
+-- not just this CHECK constraint, since SQLite CHECK errors surface as
+-- a raw IntegrityError rather than a clean 422 -- the constraint is a
+-- last-line-of-defense, not the primary validation.
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
+    created_at TEXT NOT NULL
+);
+
+-- Dashboard login sessions (see auth.py / app.py's session-cookie gate).
+-- No expiry column yet -- sessions live until logout or the DB is reset;
+-- fine for a small-team internal tool, worth revisiting if that changes.
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -134,6 +177,33 @@ def active_runs_for_hosts(hosts: list[str]) -> dict[str, str]:
         return {r["host"]: r["run_id"] for r in rows}
 
 
+def current_actions_for_hosts() -> dict[str, dict]:
+    """Maps host -> its currently in-progress ActionSpec (dispatched, no
+    completion_record yet), for every host that has one. Unlike
+    active_runs_for_hosts() this deliberately excludes not-yet-dispatched
+    actions -- it answers "what is this host doing right now", which is
+    what the dashboard's live topology view needs to decide what to
+    animate. If a host somehow has more than one (shouldn't happen --
+    the agent runs one action at a time -- but nothing enforces it),
+    the most recently started one wins."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.host, a.payload
+            FROM action_specs a
+            LEFT JOIN completion_records c ON a.action_id = c.action_id
+            WHERE a.dispatched = 1 AND c.action_id IS NULL
+            """
+        ).fetchall()
+        current: dict[str, dict] = {}
+        for r in rows:
+            spec = json.loads(r["payload"])
+            host = r["host"]
+            if host not in current or spec["intended_start"] > current[host]["intended_start"]:
+                current[host] = spec
+        return current
+
+
 def save_intent(action_id: str, payload: dict):
     with get_conn() as conn:
         conn.execute(
@@ -190,6 +260,145 @@ def upsert_agent(host: str, os_: str, persona: str | None, last_seen: str):
             """,
             (host, os_, persona, last_seen),
         )
+
+
+def save_schedule(
+    schedule_id: str,
+    scenario_name: str,
+    hosts: list[str],
+    interval_seconds: int,
+    next_run_at: str,
+    seed: int | None,
+    created_at: str,
+):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO schedules
+                (schedule_id, scenario_name, hosts, interval_seconds, next_run_at, seed, enabled, created_at, last_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL)
+            """,
+            (schedule_id, scenario_name, json.dumps(hosts), interval_seconds, next_run_at, seed, created_at),
+        )
+
+
+def _row_to_schedule(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["hosts"] = json.loads(d["hosts"])
+    d["enabled"] = bool(d["enabled"])
+    return d
+
+
+def list_schedules() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM schedules ORDER BY next_run_at ASC").fetchall()
+        return [_row_to_schedule(r) for r in rows]
+
+
+def due_schedules(now: str) -> list[dict]:
+    """Enabled schedules whose next_run_at has already arrived -- what the
+    background scheduler loop in app.py fires on each poll tick."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM schedules WHERE enabled = 1 AND next_run_at <= ?", (now,)
+        ).fetchall()
+        return [_row_to_schedule(r) for r in rows]
+
+
+def update_schedule_after_run(schedule_id: str, next_run_at: str, last_run_id: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE schedules SET next_run_at = ?, last_run_id = ? WHERE schedule_id = ?",
+            (next_run_at, last_run_id, schedule_id),
+        )
+
+
+def set_schedule_enabled(schedule_id: str, enabled: bool) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE schedules SET enabled = ? WHERE schedule_id = ?", (1 if enabled else 0, schedule_id)
+        )
+        return cur.rowcount > 0
+
+
+def delete_schedule(schedule_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM schedules WHERE schedule_id = ?", (schedule_id,))
+        return cur.rowcount > 0
+
+
+def get_agent_token(host: str) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT token FROM agent_tokens WHERE host = ?", (host,)).fetchone()
+        return row["token"] if row else None
+
+
+def save_agent_token(host: str, token: str, issued_at: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO agent_tokens (host, token, issued_at) VALUES (?, ?, ?)",
+            (host, token, issued_at),
+        )
+
+
+def get_user(username: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_user(username: str, password_hash: str, salt: str, role: str, created_at: str):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash,
+                salt=excluded.salt, role=excluded.role
+            """,
+            (username, password_hash, salt, role, created_at),
+        )
+
+
+def list_users() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT username, role, created_at FROM users ORDER BY created_at ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_user(username: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        return cur.rowcount > 0
+
+
+def count_admins() -> int:
+    with get_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").fetchone()
+        return row["n"]
+
+
+def create_session(session_id: str, username: str, created_at: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO sessions (session_id, username, created_at) VALUES (?, ?, ?)",
+            (session_id, username, created_at),
+        )
+
+
+def get_session(session_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT session_id, username, created_at FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_session(session_id: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
 
 
 def get_ledger_for_run(run_id: str) -> dict:

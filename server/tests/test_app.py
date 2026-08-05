@@ -10,12 +10,49 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+import db
+from conftest import TEST_ADMIN_PASSWORD
 
 
 @pytest.fixture
 def client(isolated_db):
+    """Pre-authenticated as the built-in admin account: most tests care
+    about business logic, not auth mechanics, so logging in here keeps
+    the rest of this file focused. The auth gate itself -- including
+    role checks -- is tested separately below with anon_client and
+    viewer_client."""
+    with TestClient(app_module.app) as c:
+        resp = c.post("/auth/login", json={"username": "admin", "password": TEST_ADMIN_PASSWORD})
+        assert resp.status_code == 200
+        yield c
+
+
+@pytest.fixture
+def anon_client(isolated_db):
     with TestClient(app_module.app) as c:
         yield c
+
+
+@pytest.fixture
+def viewer_client(client):
+    """A second, non-admin session -- `client` (already logged in as
+    admin) creates the viewer account, then a fresh TestClient logs in
+    as it. Two separate TestClient instances so the two sessions'
+    cookies never collide."""
+    client.post("/users", json={"username": "viewer1", "password": "viewer-password", "role": "viewer"})
+    with TestClient(app_module.app) as c:
+        resp = c.post("/auth/login", json={"username": "viewer1", "password": "viewer-password"})
+        assert resp.status_code == 200
+        yield c
+
+
+def agent_auth(host: str) -> dict:
+    """Provisions a token for `host` directly (bypassing the normal
+    install-bundle minting flow, which is exercised separately) and
+    returns the header an agent-facing request needs to present it."""
+    token = f"test-token-{host}"
+    db.save_agent_token(host, token, datetime.utcnow().isoformat())
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_health(client):
@@ -92,13 +129,15 @@ def test_poll_only_returns_ready_actions(client):
             "start_time": start_time,
         },
     )
-    resp = client.get("/agents/H1/poll")
+    resp = client.get("/agents/H1/poll", headers=agent_auth("H1"))
     assert resp.status_code == 200
     assert resp.json()["actions"] == []  # everything is scheduled an hour out
 
 
 def test_register_without_client_time_has_no_drift_field(client):
-    resp = client.post("/agents/register", json={"host": "H1", "os": "windows"})
+    resp = client.post(
+        "/agents/register", json={"host": "H1", "os": "windows"}, headers=agent_auth("H1")
+    )
     assert resp.status_code == 200
     assert "clock_drift_seconds" not in resp.json()
 
@@ -106,7 +145,9 @@ def test_register_without_client_time_has_no_drift_field(client):
 def test_register_computes_clock_drift(client):
     behind = (datetime.utcnow() - timedelta(seconds=30)).isoformat()
     resp = client.post(
-        "/agents/register", json={"host": "H1", "os": "windows", "client_time": behind}
+        "/agents/register",
+        json={"host": "H1", "os": "windows", "client_time": behind},
+        headers=agent_auth("H1"),
     )
     assert resp.status_code == 200
     drift = resp.json()["clock_drift_seconds"]
@@ -116,10 +157,13 @@ def test_register_computes_clock_drift(client):
 def test_register_then_poll_preserves_os_and_persona(client):
     """Regression test for the bug where poll() clobbered os/persona to
     unknown/None -- see docs/README.md."""
+    headers = agent_auth("H1")
     client.post(
-        "/agents/register", json={"host": "H1", "os": "windows", "persona": "finance_analyst"}
+        "/agents/register",
+        json={"host": "H1", "os": "windows", "persona": "finance_analyst"},
+        headers=headers,
     )
-    client.get("/agents/H1/poll")
+    client.get("/agents/H1/poll", headers=headers)
 
     agents = {a["host"]: a for a in client.get("/agents").json()["agents"]}
     assert agents["H1"]["os"] == "windows"
@@ -157,3 +201,178 @@ def test_install_bundle_zips_installer_with_correct_sidecar(client, tmp_path, mo
     assert lines[0].startswith("http://")
     assert lines[1] == "H1"
     assert lines[2] == "finance_analyst"
+    assert lines[3] == db.get_agent_token("H1")
+    assert lines[3]  # non-empty
+
+
+def test_install_bundle_reuses_token_on_repeat_download(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_INSTALLER_NAME).write_bytes(b"fake installer bytes")
+
+    first = client.get("/install/agent-bundle", params={"host_id": "H1"})
+    second = client.get("/install/agent-bundle", params={"host_id": "H1"})
+
+    def token_from(resp):
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        return zf.read("install-defaults.txt").decode().splitlines()[3]
+
+    assert token_from(first) == token_from(second)
+
+
+# ---- auth gate itself -------------------------------------------------
+
+
+def test_protected_route_401s_without_session(anon_client):
+    assert anon_client.get("/runs").status_code == 401
+
+
+def test_login_with_wrong_password_401s(anon_client):
+    resp = anon_client.post("/auth/login", json={"username": "admin", "password": "not-it"})
+    assert resp.status_code == 401
+
+
+def test_login_with_unknown_username_401s(anon_client):
+    resp = anon_client.post("/auth/login", json={"username": "nobody", "password": "whatever"})
+    assert resp.status_code == 401
+
+
+def test_login_with_right_password_grants_access(anon_client):
+    login = anon_client.post("/auth/login", json={"username": "admin", "password": TEST_ADMIN_PASSWORD})
+    assert login.status_code == 200
+    assert login.json()["role"] == "admin"
+    assert anon_client.get("/runs").status_code == 200
+
+
+def test_logout_revokes_session(client):
+    assert client.get("/runs").status_code == 200
+    client.post("/auth/logout")
+    assert client.get("/runs").status_code == 401
+
+
+def test_static_ui_is_reachable_without_a_session(anon_client):
+    resp = anon_client.get("/ui/")
+    assert resp.status_code == 200
+
+
+def test_health_is_reachable_without_a_session(anon_client):
+    assert anon_client.get("/health").status_code == 200
+
+
+def test_agent_register_401s_without_token(client):
+    resp = client.post("/agents/register", json={"host": "H1", "os": "windows"})
+    assert resp.status_code == 401
+
+
+def test_agent_register_401s_with_wrong_token(client):
+    resp = client.post(
+        "/agents/register",
+        json={"host": "H1", "os": "windows"},
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert resp.status_code == 401
+
+
+def test_agent_token_is_scoped_to_its_own_host(client):
+    """H2's token shouldn't authenticate a request claiming to be H1."""
+    h2_headers = agent_auth("H2")
+    resp = client.post("/agents/register", json={"host": "H1", "os": "windows"}, headers=h2_headers)
+    assert resp.status_code == 401
+
+
+# ---- roles --------------------------------------------------------------
+
+
+def test_whoami_reports_role(client, viewer_client):
+    assert client.get("/auth/me").json() == {"username": "admin", "role": "admin"}
+    assert viewer_client.get("/auth/me").json() == {"username": "viewer1", "role": "viewer"}
+
+
+def test_viewer_can_read(viewer_client):
+    assert viewer_client.get("/runs").status_code == 200
+    assert viewer_client.get("/scenarios").status_code == 200
+    assert viewer_client.get("/agents").status_code == 200
+    assert viewer_client.get("/schedules").status_code == 200
+
+
+def test_viewer_cannot_launch_a_run(viewer_client):
+    resp = viewer_client.post(
+        "/runs", json={"scenario_name": "finance_analyst", "hosts": ["H1"], "seed": 1}
+    )
+    assert resp.status_code == 403
+
+
+def test_viewer_cannot_create_scenario(viewer_client):
+    resp = viewer_client.post(
+        "/scenarios",
+        json={"name": "_viewer_test", "persona": "x", "schedule": [{"action": "web_browse"}]},
+    )
+    assert resp.status_code == 403
+
+
+def test_viewer_cannot_create_schedule(viewer_client):
+    resp = viewer_client.post(
+        "/schedules",
+        json={"scenario_name": "finance_analyst", "hosts": ["H1"], "interval_seconds": 60},
+    )
+    assert resp.status_code == 403
+
+
+def test_viewer_cannot_download_install_bundle(viewer_client):
+    resp = viewer_client.get("/install/agent-bundle", params={"host_id": "H1"})
+    assert resp.status_code == 403
+
+
+def test_viewer_cannot_manage_users(viewer_client):
+    assert viewer_client.get("/users").status_code == 403
+    assert (
+        viewer_client.post(
+            "/users", json={"username": "another", "password": "password123", "role": "viewer"}
+        ).status_code
+        == 403
+    )
+
+
+def test_admin_can_create_and_list_users(client):
+    resp = client.post(
+        "/users", json={"username": "newviewer", "password": "password123", "role": "viewer"}
+    )
+    assert resp.status_code == 200
+
+    usernames = {u["username"] for u in client.get("/users").json()["users"]}
+    assert usernames == {"admin", "newviewer"}
+
+
+def test_creating_duplicate_username_409s(client):
+    client.post("/users", json={"username": "dupe", "password": "password123", "role": "viewer"})
+    resp = client.post("/users", json={"username": "dupe", "password": "password123", "role": "viewer"})
+    assert resp.status_code == 409
+
+
+def test_creating_user_with_short_password_422s(client):
+    resp = client.post("/users", json={"username": "shortpw", "password": "short", "role": "viewer"})
+    assert resp.status_code == 422
+
+
+def test_admin_cannot_delete_own_account(client):
+    resp = client.delete("/users/admin")
+    assert resp.status_code == 400
+
+
+def test_cannot_delete_the_last_admin(client):
+    """admin is the only admin account in a fresh test DB."""
+    client.post("/users", json={"username": "other", "password": "password123", "role": "viewer"})
+    resp = client.delete("/users/admin")
+    assert resp.status_code == 400
+
+
+def test_admin_can_delete_another_admin_if_not_the_last_one(client):
+    client.post("/users", json={"username": "admin2", "password": "password123", "role": "admin"})
+    resp = client.delete("/users/admin2")
+    assert resp.status_code == 204
+    assert "admin2" not in {u["username"] for u in client.get("/users").json()["users"]}
+
+
+def test_deleted_users_session_stops_working(client, viewer_client):
+    assert viewer_client.get("/runs").status_code == 200
+    client.delete("/users/viewer1")
+    assert viewer_client.get("/runs").status_code == 401

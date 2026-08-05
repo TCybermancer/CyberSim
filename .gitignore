@@ -4,6 +4,8 @@ __pycache__/
 venv/
 config.yaml
 inventory.ini
+provisioning/group_vars/all/vault.yml
+provisioning/group_vars/all/vars.yml
 server/cybersim.db
 
 # runtime artifacts the action modules create by default

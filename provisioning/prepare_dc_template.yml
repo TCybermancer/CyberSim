@@ -1,0 +1,21 @@
+---
+# One-time: generalizes source_vm_name (group_vars/all.yml, default
+# "FileServer") into a reusable Windows Server template that
+# build_domain_controller.yml can clone from repeatedly.
+#
+# Prerequisite you must do by hand, once, before running this (see
+# roles/dc_template_prep/files/bootstrap_console.ps1 and its comments for
+# why this specific step can't be automated headlessly):
+#   1. Open the source VM's console (ESXi web UI).
+#   2. Log in as the local admin named in group_vars/vault.yml
+#      (template_guest_user).
+#   3. Elevate ("Run as Administrator") and run bootstrap_console.ps1.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini prepare_dc_template.yml --ask-vault-pass
+
+- name: Generalize source VM into a reusable DC template
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - dc_template_prep

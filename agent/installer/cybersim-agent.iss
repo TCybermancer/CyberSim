@@ -8,9 +8,10 @@
 ; "Autolinks to the server": if a file named install-defaults.txt sits
 ; next to Setup.exe when it's run (server/app.py's /install/agent-bundle
 ; endpoint zips one up per download, pre-filled with the requesting
-; server's own base URL), its first line pre-fills the Server URL wizard
-; field below. Absent that file, the field is just blank -- the wizard
-; still works standalone.
+; server's own base URL, host_id, persona, and that host's freshly
+; minted/reused bearer token), its four lines pre-fill the wizard fields
+; below. Absent that file, the fields are just blank -- the wizard still
+; works standalone (paste in a token issued some other way).
 ;
 ; Runs the agent via a Scheduled Task set to fire at user logon (not a
 ; SYSTEM service): puppet hosts are meant to look like a real logged-in
@@ -84,12 +85,18 @@ begin
   ConnectionPage.Add('Server URL:', False);
   ConnectionPage.Add('Host ID (must match a scenario''s "hosts" list on the server):', False);
   ConnectionPage.Add('Persona:', False);
+  ConnectionPage.Add('Agent Token (from the install bundle, or issued separately by the server):', True);
 
-  { install-defaults.txt line order: server_url, host_id, persona --
-    see server/app.py's bundle-generation endpoint. }
+  { install-defaults.txt line order: server_url, host_id, persona, token --
+    see server/app.py's bundle-generation endpoint. The token field is
+    masked (Password:=True above) since it's a credential -- the server
+    only ever ships it embedded in this sidecar file, never shown back
+    to a human, so masking it here is just defense in depth against
+    shoulder-surfing during an interactive install. }
   ConnectionPage.Values[0] := GetDefault(0, 'http://SERVER-ADDRESS:8000');
   ConnectionPage.Values[1] := GetDefault(1, GetEnv('COMPUTERNAME'));
   ConnectionPage.Values[2] := GetDefault(2, 'default');
+  ConnectionPage.Values[3] := GetDefault(3, '');
 end;
 
 function YamlEscape(const S: String): String;
@@ -112,12 +119,13 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    SetArrayLength(ConfigLines, 5);
+    SetArrayLength(ConfigLines, 6);
     ConfigLines[0] := 'server_url: "' + YamlEscape(ConnectionPage.Values[0]) + '"';
     ConfigLines[1] := 'host_id: "' + YamlEscape(ConnectionPage.Values[1]) + '"';
     ConfigLines[2] := 'os: "windows"';
     ConfigLines[3] := 'persona: "' + YamlEscape(ConnectionPage.Values[2]) + '"';
     ConfigLines[4] := 'poll_interval_seconds: 10';
+    ConfigLines[5] := 'token: "' + YamlEscape(ConnectionPage.Values[3]) + '"';
     SaveStringsToFile(ExpandConstant('{app}\config.yaml'), ConfigLines, False);
   end;
 end;

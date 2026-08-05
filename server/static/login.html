@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberSim orchestrator — log in</title>
+<script>
+(function () {
+  var t = localStorage.getItem("cybersim-theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+<link rel="stylesheet" href="style.css?v=11">
+</head>
+<body>
+<header>
+  <h1>CyberSim orchestrator</h1>
+  <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
+</header>
+
+<main style="grid-template-columns: 1fr; max-width: 420px;">
+  <section class="col">
+    <div class="card">
+      <h2>Log in</h2>
+      <p class="hint" style="margin-top:0">
+        No account set up yet? Log in as <code>admin</code> &mdash; the server prints its
+        generated password to its own startup logs the first time it runs without
+        <code>CYBERSIM_ADMIN_PASSWORD</code> set.
+      </p>
+      <form id="login-form">
+        <label>
+          Username
+          <input id="username-input" type="text" required autofocus value="admin">
+        </label>
+        <label>
+          Password
+          <input id="password-input" type="password" required>
+        </label>
+        <button type="submit">Log in</button>
+      </form>
+      <div id="login-result" class="result"></div>
+    </div>
+  </section>
+</main>
+
+<script src="theme.js?v=1"></script>
+<script src="login.js?v=2"></script>
+</body>
+</html>

@@ -2,17 +2,52 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CyberSim orchestrator</title>
-<link rel="stylesheet" href="style.css">
+<script>
+(function () {
+  var t = localStorage.getItem("cybersim-theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  if (localStorage.getItem("cybersim-onboarding-dismissed") === "1") {
+    document.documentElement.classList.add("onboarding-dismissed");
+  }
+})();
+</script>
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 <header>
   <h1>CyberSim orchestrator</h1>
-  <a href="install.html" class="pill pill-unknown" style="text-decoration:none">install agent &rarr;</a>
-  <div id="health" class="pill pill-unknown">checking server&hellip;</div>
+  <a id="nav-scenario-builder" href="scenario-builder.html" class="pill pill-unknown" style="text-decoration:none">build scenario &rarr;</a>
+  <a id="nav-install" href="install.html" class="pill pill-unknown" style="text-decoration:none">install agent &rarr;</a>
+  <a id="nav-users" href="users.html" class="pill pill-unknown" style="text-decoration:none; display:none">users &rarr;</a>
+  <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
+  <button type="button" id="onboarding-reopen" class="pill pill-unknown" title="Show getting-started guide">?</button>
+  <div id="health" class="pill pill-unknown"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle class="icon-spin" cx="8" cy="8" r="5.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="17 26"/></svg> checking server&hellip;</div>
+  <span id="whoami-pill" class="pill pill-unknown"></span>
+  <button type="button" id="logout-btn" class="pill pill-unknown">log out</button>
 </header>
 
 <main>
+  <div class="card onboarding-card" id="onboarding-card">
+    <button type="button" id="onboarding-dismiss" class="onboarding-dismiss" aria-label="Dismiss getting-started guide">&times;</button>
+    <h2>Getting started</h2>
+    <ol class="onboarding-steps">
+      <li><strong>Install agents</strong> on the hosts you want to simulate activity on &mdash; <a href="install.html">download the Windows installer</a>, pre-linked to this server.</li>
+      <li><strong><a href="scenario-builder.html">Build a scenario</a></strong> (or use one already on the server) &mdash; a persona's schedule of actions, some optionally flagged as red-team activity your detection tooling should catch.</li>
+      <li><strong>Launch a run</strong> below, against one or more registered hosts.</li>
+      <li><strong>Watch it happen</strong> in the live topology and the schedule/ledger below &mdash; that's your ground truth for scoring whatever detection tool you're validating.</li>
+    </ol>
+  </div>
+
+  <div class="card topology-card">
+    <div class="card-header">
+      <h2>Live topology</h2>
+      <span id="topology-count" class="hint"></span>
+    </div>
+    <div id="topology-root" class="topology-scroll"></div>
+  </div>
+
   <section class="col">
     <div class="card">
       <h2>Launch a run</h2>
@@ -41,27 +76,60 @@
           </label>
         </div>
 
-        <button type="submit">Launch run</button>
+        <label class="checkbox-label">
+          <input type="checkbox" id="repeat-toggle">
+          Repeat <span class="hint">(fire this same launch on an interval instead of once)</span>
+        </label>
+        <div class="row" id="repeat-interval-row" style="display:none">
+          <label>Every <span class="hint">(minimum 1 minute)</span>
+            <div class="range-input">
+              <input id="repeat-interval-input" type="number" min="1" step="1" value="60">
+              <select id="repeat-interval-unit">
+                <option value="60">minutes</option>
+                <option value="3600">hours</option>
+                <option value="86400">days</option>
+              </select>
+            </div>
+          </label>
+        </div>
+
+        <button type="submit" id="launch-submit-btn">Launch run</button>
       </form>
       <div id="launch-result" class="result"></div>
     </div>
 
     <div class="card">
+      <h2>Scheduled runs</h2>
+      <div class="table-scroll">
+        <table id="schedules-table">
+          <thead><tr><th>scenario</th><th>hosts</th><th>every</th><th>next fire</th><th></th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="schedules-empty" class="hint">No recurring runs set up. Check "Repeat" above to create one.</p>
+    </div>
+
+    <div class="card">
       <h2>Registered agents</h2>
-      <table id="agents-table">
-        <thead><tr><th>host</th><th>os</th><th>persona</th><th>last seen</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="agents-table">
+          <thead><tr><th>host</th><th>os</th><th>persona</th><th>last seen</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
   <section class="col">
     <div class="card">
       <h2>Runs</h2>
-      <table id="runs-table">
-        <thead><tr><th>run</th><th>scenario</th><th>seed</th><th>started</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <input type="text" id="runs-filter-input" placeholder="Filter by scenario or run ID&hellip;" style="margin-bottom:0.6rem">
+      <div class="table-scroll">
+        <table id="runs-table">
+          <thead><tr><th>run</th><th>scenario</th><th>seed</th><th>started</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card">
@@ -73,15 +141,52 @@
         </label>
       </div>
       <div id="ledger-progress" class="progress"><div id="ledger-progress-bar"></div></div>
-      <table id="ledger-table">
-        <thead><tr><th>action</th><th>type</th><th>host</th><th>intended start</th><th>status</th><th>artifact</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div id="gantt-root" class="gantt-scroll"></div>
+      <div class="table-scroll">
+        <table id="ledger-table">
+          <thead><tr><th>action</th><th>type</th><th>host</th><th>intended start</th><th>status</th><th>artifact</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
       <p id="ledger-empty" class="hint">Select a run above to view its ledger.</p>
+    </div>
+
+    <div class="card">
+      <h2>Score this run <span id="scoring-run-id" class="hint"></span></h2>
+      <p class="hint" style="margin-top:0">
+        Upload your detection tool's alert export (JSON or CSV) to see which of this run's
+        should_alert actions it actually caught, against the run's own ground-truth ledger.
+      </p>
+      <form id="scoring-form">
+        <label>
+          Alert export <span class="hint">(.json or .csv &mdash; see scoring/alerts.py for the expected shape)</span>
+          <input id="alerts-file-input" type="file" accept=".json,.csv" required>
+        </label>
+        <details class="step-advanced">
+          <summary>Advanced: detection windows</summary>
+          <div class="row">
+            <label>Window before <span class="hint">(seconds; default 60)</span>
+              <input id="window-before-input" type="number" min="0" step="any" placeholder="60">
+            </label>
+            <label>Window after <span class="hint">(seconds; default 180)</span>
+              <input id="window-after-input" type="number" min="0" step="any" placeholder="180">
+            </label>
+          </div>
+        </details>
+        <button type="submit" id="scoring-submit-btn">Score this run</button>
+      </form>
+      <div id="scoring-result" class="result"></div>
+      <div id="scoring-report"></div>
     </div>
   </section>
 </main>
 
-<script src="app.js"></script>
+<script src="theme.js?v=1"></script>
+<script src="auth.js?v=2"></script>
+<script src="icons.js?v=1"></script>
+<script src="topology.js?v=3"></script>
+<script src="gantt.js?v=2"></script>
+<script src="scoring.js?v=1"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

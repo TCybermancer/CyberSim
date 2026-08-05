@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberSim orchestrator — build scenario</title>
+<script>
+(function () {
+  var t = localStorage.getItem("cybersim-theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+<link rel="stylesheet" href="style.css?v=11">
+</head>
+<body>
+<header>
+  <h1>CyberSim orchestrator</h1>
+  <a href="./" class="pill pill-unknown" style="text-decoration:none">&larr; dashboard</a>
+  <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
+  <span id="whoami-pill" class="pill pill-unknown"></span>
+  <button type="button" id="logout-btn" class="pill pill-unknown">log out</button>
+</header>
+
+<main style="grid-template-columns: 1fr; max-width: 760px;">
+  <section class="col">
+    <div class="card" id="viewer-blocked-card" style="display:none">
+      <h2>Admin access required</h2>
+      <p class="hint" style="margin-top:0">
+        Saving a scenario writes a file on the server, so only admin accounts can do this.
+        Ask an admin to build it for you, or to create you an admin account.
+      </p>
+    </div>
+
+    <div class="card" id="builder-card">
+      <h2>Build a scenario</h2>
+      <p class="hint" style="margin-top:0">
+        A scenario is a persona's schedule of actions. Each step fires after a random delay,
+        can optionally run for a random duration, and can be flagged as red-team activity your
+        detection tooling is expected to catch. Saving here writes a YAML file into the server's
+        scenario library — the same place hand-authored ones live, and it'll show up in the
+        dashboard's launch form immediately.
+      </p>
+
+      <form id="scenario-form">
+        <label>
+          Scenario name <span class="hint">(becomes the filename — letters, numbers, ., _, - only)</span>
+          <input id="scenario-name-input" type="text" placeholder="finance_analyst_variant" required pattern="[A-Za-z0-9._-]{1,64}" maxlength="64">
+        </label>
+        <label>
+          Persona <span class="hint">(shown in previews and the ledger — free text)</span>
+          <input id="persona-input" type="text" placeholder="finance_analyst" required>
+        </label>
+
+        <div id="steps-root"></div>
+        <button type="button" id="add-step-btn" class="btn-secondary">+ Add step</button>
+
+        <h3 style="margin: 1.25rem 0 0.5rem; font-size:0.85rem;">Preview</h3>
+        <div id="scenario-preview" class="preview"></div>
+
+        <div id="builder-result" class="result"></div>
+        <button type="submit">Save scenario</button>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script src="theme.js?v=1"></script>
+<script src="auth.js?v=2"></script>
+<script src="icons.js?v=1"></script>
+<script src="scenario-builder.js?v=3"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+---
+# Promotes the freshly-cloned VM into the first DC of a brand-new forest.
+# microsoft.ad.domain installs AD-Domain-Services + DNS and runs dcpromo
+# in one step; it reboots itself via the reboot: true option below.
+#
+# Runs against the domain_controller in-memory group added by
+# roles/dc_provision (WinRM over the OOB NIC).
+
+- name: Promote as the first domain controller of a new forest
+  microsoft.ad.domain:
+    dns_domain_name: "{{ domain_name }}"
+    domain_netbios_name: "{{ domain_netbios_name | default(omit) }}"
+    safe_mode_password: "{{ dsrm_password }}"
+    install_dns: true
+    reboot: true
+    reboot_timeout: 900
+  register: forest_result
+
+- name: Wait for the DC to fully settle after promotion (services starting)
+  ansible.builtin.wait_for_connection:
+    timeout: 300
+    delay: 30
+  when: forest_result.reboot_required or forest_result.changed

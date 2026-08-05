@@ -1,0 +1,109 @@
+---
+# Clones dc_template_name into a new, dual-homed VM:
+#   NIC1 -- oob_port_group   (DHCP; Ansible/WinRM management traffic)
+#   NIC2 -- inband_port_group (static dc_ip/dc_netmask/dc_gateway; the
+#           network the domain actually serves clients on)
+#
+# VMware's guest customization spec (applied via VMware Tools' deployPkg on
+# first boot) sets the hostname and per-NIC IP config -- the template's
+# sysprep /generalize left Windows waiting at OOBE specifically so this can
+# inject real, per-clone identity.
+
+- name: Clone new DC VM from template with dual-NIC customization
+  community.vmware.vmware_guest:
+    hostname: "{{ esxi_hostname }}"
+    username: "{{ esxi_username }}"
+    password: "{{ esxi_password }}"
+    validate_certs: "{{ esxi_validate_certs }}"
+    name: "{{ dc_vm_name }}"
+    folder: /ha-datacenter/vm  # standalone ESXi's datacenter is always named ha-datacenter
+    template: "{{ dc_template_name }}"
+    state: poweredon
+    wait_for_ip_address: false
+    networks:
+      - name: "{{ oob_port_group }}"
+        type: dhcp
+      - name: "{{ inband_port_group }}"
+        type: static
+        ip: "{{ dc_ip }}"
+        netmask: "{{ dc_netmask }}"
+        gateway: "{{ dc_gateway }}"
+        dns_servers:
+          - 127.0.0.1
+    customization:
+      hostname: "{{ dc_hostname }}"
+      timezone: "{{ dc_timezone | default(35) }}"  # 35 = Eastern Standard Time; see vmware_guest docs for the full index
+    hardware:
+      memory_mb: "{{ dc_memory_mb | default(4096) }}"
+      num_cpus: "{{ dc_num_cpus | default(2) }}"
+  delegate_to: localhost
+  register: dc_clone_result
+
+- name: Wait for VMware Tools on the new clone
+  community.vmware.vmware_guest_tools_wait:
+    hostname: "{{ esxi_hostname }}"
+    username: "{{ esxi_username }}"
+    password: "{{ esxi_password }}"
+    validate_certs: "{{ esxi_validate_certs }}"
+    name: "{{ dc_vm_name }}"
+  delegate_to: localhost
+
+# Guest customization re-runs Sysprep specialize/oobeSystem passes and
+# reboots at least once on first boot -- give it real time before polling.
+- name: Allow time for guest customization to complete (hostname/network apply + reboot)
+  ansible.builtin.pause:
+    seconds: 120
+
+- name: Re-wait for VMware Tools after the customization reboot
+  community.vmware.vmware_guest_tools_wait:
+    hostname: "{{ esxi_hostname }}"
+    username: "{{ esxi_username }}"
+    password: "{{ esxi_password }}"
+    validate_certs: "{{ esxi_validate_certs }}"
+    name: "{{ dc_vm_name }}"
+  delegate_to: localhost
+
+- name: Gather the clone's guest network info (to confirm both NICs came up)
+  community.vmware.vmware_guest_info:
+    hostname: "{{ esxi_hostname }}"
+    username: "{{ esxi_username }}"
+    password: "{{ esxi_password }}"
+    validate_certs: "{{ esxi_validate_certs }}"
+    name: "{{ dc_vm_name }}"
+  delegate_to: localhost
+  register: dc_guest_info
+
+- name: Extract the OOB NIC's DHCP-assigned IP (for the dynamic inventory below)
+  ansible.builtin.set_fact:
+    dc_oob_ip: >-
+      {{ (dc_guest_info.instance.guest.net
+          | selectattr('network', 'equalto', oob_port_group)
+          | map(attribute='ip_address') | list | flatten | first) | default('') }}
+
+- name: Fail if the OOB NIC never got a DHCP lease
+  ansible.builtin.fail:
+    msg: >-
+      {{ dc_vm_name }}'s OOB NIC ({{ oob_port_group }}) has no IP after
+      customization -- check that DHCP is actually reachable on that
+      port group before continuing.
+  when: dc_oob_ip == ''
+
+- name: Register the new DC as an in-memory Ansible host (OOB IP, WinRM)
+  ansible.builtin.add_host:
+    name: "{{ dc_hostname }}"
+    groups: domain_controller
+    ansible_host: "{{ dc_oob_ip }}"
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_port: 5985
+    ansible_winrm_scheme: http
+    ansible_user: "{{ template_guest_user }}"
+    ansible_password: "{{ template_guest_password }}"
+    ansible_winrm_server_cert_validation: ignore
+
+- name: Wait for WinRM to answer on the OOB IP
+  ansible.builtin.wait_for:
+    host: "{{ dc_oob_ip }}"
+    port: 5985
+    timeout: 300
+  delegate_to: localhost
