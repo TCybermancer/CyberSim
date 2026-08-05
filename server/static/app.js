@@ -80,11 +80,73 @@ async function checkHealth() {
 
 // ---- scenarios ------------------------------------------------------------
 
+// "All roles" is a synthetic org entry, not something the server sends --
+// selecting it falls back to the flat, ungrouped scenario list so an admin
+// testing one specific role doesn't need to know which org it lives under.
+const ALL_ROLES_ORG = "__all__";
+
+// Remembers the admin's last org/scenario picks across reloads (same
+// localStorage pattern as theme.js / the onboarding-dismissed flag).
+// Orgs are still offered alphabetically -- this only affects which one
+// is pre-selected, and only once something's actually been picked.
+const LAST_ORG_KEY = "cybersim-last-org";
+const LAST_SCENARIO_KEY = "cybersim-last-scenario";
+
+let allScenarioNames = [];
+let scenarioOrgs = [];
+
 async function loadScenarios() {
+  const { scenarios, orgs } = await api("/scenarios");
+  allScenarioNames = scenarios;
+  scenarioOrgs = orgs; // server already returns these sorted alphabetically by org name
+
+  const orgSelect = $("scenario-org-select");
+  const orgOptions = orgs.map((o) => `<option value="${escapeHtml(o.org)}">${escapeHtml(o.org)}</option>`);
+  orgOptions.push(`<option value="${ALL_ROLES_ORG}">All roles</option>`);
+  orgSelect.innerHTML = orgOptions.join("");
+
+  const knownOrgValues = new Set([...orgs.map((o) => o.org), ALL_ROLES_ORG]);
+  const lastOrg = localStorage.getItem(LAST_ORG_KEY);
+  // Fall back to the alphabetically-first real org (not "All roles") when
+  // nothing's been remembered yet, or the remembered org no longer exists.
+  orgSelect.value = lastOrg && knownOrgValues.has(lastOrg)
+    ? lastOrg
+    : (orgs.length ? orgs[0].org : ALL_ROLES_ORG);
+
+  await populateScenarioSelectForOrg(orgSelect.value, localStorage.getItem(LAST_SCENARIO_KEY));
+}
+
+async function populateScenarioSelectForOrg(orgName, preferredScenario) {
   const select = $("scenario-select");
-  const { scenarios } = await api("/scenarios");
-  select.innerHTML = scenarios.map((s) => `<option value="${s}">${s}</option>`).join("");
-  if (scenarios.length) await loadScenarioPreview(scenarios[0]);
+
+  if (orgName === ALL_ROLES_ORG || !orgName) {
+    select.innerHTML = allScenarioNames.map((s) => `<option value="${s}">${s}</option>`).join("");
+  } else {
+    const org = scenarioOrgs.find((o) => o.org === orgName);
+    const departments = org ? org.departments : [];
+    select.innerHTML = departments
+      .map(
+        (d) =>
+          `<optgroup label="${escapeHtml(d.department)}">` +
+          d.roles
+            .map((r) => `<option value="${r.name}">${escapeHtml(r.persona)}</option>`)
+            .join("") +
+          `</optgroup>`
+      )
+      .join("");
+  }
+
+  const optionValues = new Set([...select.options].map((o) => o.value));
+  const chosen = preferredScenario && optionValues.has(preferredScenario)
+    ? preferredScenario
+    : select.options[0]?.value ?? null;
+  if (chosen) select.value = chosen;
+
+  localStorage.setItem(LAST_ORG_KEY, orgName);
+  if (chosen) localStorage.setItem(LAST_SCENARIO_KEY, chosen);
+  else localStorage.removeItem(LAST_SCENARIO_KEY);
+
+  await loadScenarioPreview(chosen);
 }
 
 async function loadScenarioPreview(name) {
@@ -294,7 +356,11 @@ async function loadLedger() {
 // ---- launch form ----------------------------------------------------------
 
 function setupLaunchForm() {
-  $("scenario-select").addEventListener("change", (e) => loadScenarioPreview(e.target.value));
+  $("scenario-org-select").addEventListener("change", (e) => populateScenarioSelectForOrg(e.target.value));
+  $("scenario-select").addEventListener("change", (e) => {
+    localStorage.setItem(LAST_SCENARIO_KEY, e.target.value);
+    loadScenarioPreview(e.target.value);
+  });
 
   const repeatToggle = $("repeat-toggle");
   const repeatRow = $("repeat-interval-row");

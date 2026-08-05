@@ -11,7 +11,8 @@ Agents on the in-band range network reach this API only via their OOB NIC
   POST /ledger/completion      agent reports "did X, here's what happened"
   POST /runs                   start a scenario run (assigns hosts, seeds, resolves schedule)
   GET  /runs/{run_id}/ledger   scoring harness (or the UI) pulls the joined ground-truth ledger
-  GET  /scenarios              scenario names available to launch (for the UI's picker)
+  GET  /scenarios              scenario names available to launch, flat and grouped by
+                                org/department (for the UI's org-first picker)
   GET  /scenarios/{name}       one scenario's persona + schedule (for the UI's preview)
   POST /scenarios              writes a new scenario YAML file (for the UI's scenario builder)
   GET  /agents                 registered hosts (for the UI's host picker)
@@ -640,8 +641,57 @@ def health():
 @app.get("/scenarios")
 def list_scenarios():
     """Scenario names available to launch a run against (read from
-    server/scenarios/*.yaml). The UI's "launch a run" form uses this."""
-    return {"scenarios": sorted(p.stem for p in SCENARIOS_DIR.glob("*.yaml"))}
+    server/scenarios/*.yaml), plus the same scenarios grouped by their
+    `org`/`department` YAML metadata (see docs/README.md) so the UI's
+    "launch a run" form can offer an org-first picker.
+
+    `scenarios` is the flat, back-compat list every caller has always
+    gotten. `orgs` is additive: one entry per distinct `org` value found
+    across all scenario files, each holding its roles grouped by
+    `department` (Executive listed first if present, then alphabetical --
+    a small nicety since Executive is conventionally the top of an org
+    chart). Scenarios with no `org` tag (e.g. the original example
+    scenario) are omitted from `orgs` entirely -- they still appear in
+    the flat `scenarios` list, which is what the UI's "All roles" option
+    uses so an admin can jump straight to any individual scenario for
+    quick testing without first knowing which org it belongs to.
+    """
+    names = sorted(p.stem for p in SCENARIOS_DIR.glob("*.yaml"))
+
+    by_org: dict[str, dict[str, list[dict[str, str]]]] = {}
+    for name in names:
+        try:
+            doc = load_scenario(SCENARIOS_DIR / f"{name}.yaml")
+        except Exception:
+            continue
+        org = doc.get("org")
+        if not org:
+            continue
+        department = doc.get("department") or "General"
+        by_org.setdefault(org, {}).setdefault(department, []).append(
+            {"name": name, "persona": doc.get("persona", name)}
+        )
+
+    def department_sort_key(department: str) -> tuple[int, str]:
+        return (0, "") if department == "Executive" else (1, department)
+
+    orgs = [
+        {
+            "org": org,
+            "departments": [
+                {
+                    "department": department,
+                    "roles": sorted(roles, key=lambda r: r["persona"]),
+                }
+                for department, roles in sorted(
+                    departments.items(), key=lambda kv: department_sort_key(kv[0])
+                )
+            ],
+        }
+        for org, departments in sorted(by_org.items())
+    ]
+
+    return {"scenarios": names, "orgs": orgs}
 
 
 @app.get("/scenarios/{name}")

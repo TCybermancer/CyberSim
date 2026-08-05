@@ -69,6 +69,33 @@ def test_list_scenarios_includes_finance_analyst(client):
     assert "finance_analyst" in resp.json()["scenarios"]
 
 
+def test_list_scenarios_groups_by_org_and_department(client):
+    resp = client.get("/scenarios")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    orgs_by_name = {o["org"]: o for o in body["orgs"]}
+    assert "Metro Airport" in orgs_by_name
+
+    airport = orgs_by_name["Metro Airport"]
+    dept_names = [d["department"] for d in airport["departments"]]
+    assert "Executive" in dept_names
+    # Executive is always sorted first, ahead of the alphabetically-earlier
+    # departments this org also has (e.g. "Airport Operations").
+    assert dept_names[0] == "Executive"
+
+    executive = next(d for d in airport["departments"] if d["department"] == "Executive")
+    role_names = [r["name"] for r in executive["roles"]]
+    assert "airport_director" in role_names
+
+    # finance_analyst has no org/department metadata -- it must stay out
+    # of every org group, even though it's still in the flat list.
+    all_grouped_names = {
+        r["name"] for o in body["orgs"] for d in o["departments"] for r in d["roles"]
+    }
+    assert "finance_analyst" not in all_grouped_names
+
+
 def test_get_unknown_scenario_404s(client):
     assert client.get("/scenarios/does-not-exist").status_code == 404
 
