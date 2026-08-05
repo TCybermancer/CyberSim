@@ -142,6 +142,19 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- "localhost". Set explicitly (e.g. "http://192.168.158.1:8000") for
 -- Remote Install to be reliable at all; leave blank only for same-
 -- machine/loopback testing where request.base_url happens to work.
+--
+-- mail_server_host/port: the single shared SMTP relay every org's
+-- agents send through (Option A from the mail-architecture discussion
+-- in docs/README.md -- one relay, not real per-org mail servers doing
+-- inter-domain routing). Not a secret, just an address, so unlike the
+-- remote_* credentials above it's echoed back plainly. Injected into
+-- every email_send ActionSpec's params at run-launch time (see
+-- app.py's _apply_mail_server_override) rather than living only in
+-- each agent's local config.yaml, specifically so changing it here
+-- takes effect on the *next launched run* with no agent-side update or
+-- reinstall needed -- agents already poll for fresh ActionSpecs every
+-- run, this just rides that same mechanism. Unset falls back to
+-- whatever each agent's own config.yaml smtp: block says.
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_mode TEXT NOT NULL DEFAULT 'airgapped' CHECK (network_mode IN ('airgapped', 'connected')),
@@ -159,6 +172,8 @@ CREATE TABLE IF NOT EXISTS settings (
     remote_windows_winrm_user TEXT,
     remote_windows_winrm_password TEXT,
     remote_install_server_url TEXT,
+    mail_server_host TEXT,
+    mail_server_port INTEGER,
     updated_at TEXT NOT NULL
 );
 """
@@ -483,6 +498,8 @@ _DEFAULT_SETTINGS = {
     "remote_windows_winrm_user": None,
     "remote_windows_winrm_password": None,
     "remote_install_server_url": None,
+    "mail_server_host": None,
+    "mail_server_port": None,
 }
 
 
@@ -513,8 +530,8 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                  openai_api_key, openai_model, local_base_url, local_api_key, local_model,
                  remote_linux_ssh_user, remote_linux_ssh_private_key, remote_linux_ssh_password,
                  remote_windows_winrm_user, remote_windows_winrm_password,
-                 remote_install_server_url, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 remote_install_server_url, mail_server_host, mail_server_port, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 network_mode=excluded.network_mode, llm_provider=excluded.llm_provider,
                 anthropic_api_key=excluded.anthropic_api_key, anthropic_model=excluded.anthropic_model,
@@ -527,6 +544,8 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                 remote_windows_winrm_user=excluded.remote_windows_winrm_user,
                 remote_windows_winrm_password=excluded.remote_windows_winrm_password,
                 remote_install_server_url=excluded.remote_install_server_url,
+                mail_server_host=excluded.mail_server_host,
+                mail_server_port=excluded.mail_server_port,
                 updated_at=excluded.updated_at
             """,
             (
@@ -545,6 +564,8 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                 merged["remote_windows_winrm_user"],
                 merged["remote_windows_winrm_password"],
                 merged["remote_install_server_url"],
+                merged["mail_server_host"],
+                merged["mail_server_port"],
                 updated_at,
             ),
         )

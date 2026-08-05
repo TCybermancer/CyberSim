@@ -343,6 +343,8 @@ def _mask_settings(s: dict) -> dict:
         "remote_windows_winrm_password_set": bool(s.get("remote_windows_winrm_password")),
         # Not a secret -- an address, echoed back plainly like the usernames above.
         "remote_install_server_url": s.get("remote_install_server_url"),
+        "mail_server_host": s.get("mail_server_host"),
+        "mail_server_port": s.get("mail_server_port"),
         "updated_at": s.get("updated_at"),
     }
 
@@ -372,6 +374,8 @@ class SettingsUpdateRequest(BaseModel):
     remote_windows_winrm_user: str | None = None
     remote_windows_winrm_password: str | None = None
     remote_install_server_url: str | None = None
+    mail_server_host: str | None = None
+    mail_server_port: int | None = Field(default=None, ge=1, le=65535)
 
 
 @app.put("/settings", dependencies=[Depends(require_admin)])
@@ -519,6 +523,38 @@ async def _apply_live_content(specs: list[ActionSpec], scenario: dict, settings:
         spec.params["body"] = body
 
 
+def _apply_mail_server_override(specs: list[ActionSpec], settings: dict) -> None:
+    """Mutates every email_send spec's params in place with the shared
+    mail relay's host/port (Settings -> General's "Mail server" fields),
+    if configured -- see agent/actions/email_send.py, which prefers
+    params.smtp_host/smtp_port over its own local config.yaml smtp:
+    block when present.
+
+    Unlike _apply_live_content, this runs for *every* launch -- seeded
+    replay included, network_mode regardless. It's not a content-
+    determinism concern the way generated email subject/body is (the
+    resolved schedule/content is unaffected either way); it's just
+    which physical relay the agent connects to, which was never part of
+    resolve()'s byte-identical-given-the-same-seed guarantee to begin
+    with (today, absent this override, that's decided by whatever's in
+    each agent's local config.yaml -- invisible to the ActionSpec/ledger
+    regardless). This is what lets changing the relay's address here
+    take effect on the very next launched run with no agent-side update
+    or reinstall -- agents already poll for fresh ActionSpecs every run;
+    this just rides that same mechanism instead of requiring a push-to-
+    every-host config change."""
+    host = settings.get("mail_server_host")
+    if not host:
+        return
+    port = settings.get("mail_server_port")
+    for spec in specs:
+        if spec.action_type != ActionType.EMAIL_SEND:
+            continue
+        spec.params["smtp_host"] = host
+        if port:
+            spec.params["smtp_port"] = port
+
+
 async def _launch_run(scenario_name: str, hosts: list[str], start_time: datetime, seed: int | None):
     """Core of starting a run -- shared by POST /runs and the recurring-
     schedule background loop below, so there's exactly one place that
@@ -540,16 +576,21 @@ async def _launch_run(scenario_name: str, hosts: list[str], start_time: datetime
 
     run_id, seed_used, specs = resolve(scenario, hosts, start_time, seed)
 
+    settings = db.get_settings()
+
+    # Mail server override applies to every launch, seeded replay
+    # included -- see _apply_mail_server_override's own docstring for
+    # why that's fine determinism-wise.
+    _apply_mail_server_override(specs, settings)
+
     # Live content generation only for genuinely fresh launches: an
     # explicit seed means the caller wants an exact replay, and
     # resolve()'s own byte-identical-given-the-same-seed guarantee would
     # otherwise be silently broken by content an LLM can't reproduce on
     # request. network_mode gates it the other way -- airgapped
     # deployments never make this call at all, not even to check.
-    if seed is None:
-        settings = db.get_settings()
-        if settings["network_mode"] == "connected":
-            await _apply_live_content(specs, scenario, settings)
+    if seed is None and settings["network_mode"] == "connected":
+        await _apply_live_content(specs, scenario, settings)
 
     db.save_run(run_id, scenario_name, seed_used, start_time.isoformat())
     db.save_action_specs([s.model_dump(mode="json") for s in specs])

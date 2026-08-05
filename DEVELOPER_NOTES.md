@@ -326,6 +326,17 @@ out in real execution time the way their `intended_start` implies --
   three real bugs that surfaced only by testing against real, separate
   targets -- none of them were reachable by mocking the SSH/WinRM
   layer, however thoroughly.
+- Mail server (Settings -> General's "Mail server" fields,
+  `server/app.py`'s `_apply_mail_server_override`,
+  `agent/actions/email_send.py`'s `params.smtp_host`/`smtp_port`
+  precedence over local `config.yaml`): the Option A outcome of the
+  mail-architecture discussion -- one shared SMTP relay for every org,
+  not real per-org mail servers relaying to each other (Option B,
+  tabled). Configured once, injected into every `email_send`
+  `ActionSpec`'s params at run-launch time -- seeded replays included,
+  unlike live content generation, since which relay handles mail isn't
+  a content-determinism concern -- so changing it takes effect on the
+  next launched run with no agent-side change. See "Mail server" below.
 - Automated tests (`server/tests/`, `scoring/tests/`, `agent/tests/`,
   70 tests) and CI (`.github/workflows/`) — see "Testing" and "CI /
   Releases" below for scope (full coverage for `server`/`scoring`; agent

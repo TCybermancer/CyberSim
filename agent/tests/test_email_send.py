@@ -66,6 +66,29 @@ def test_execute_defaults_to_generic_template_and_configured_from_addr():
     assert sent_msg["From"] == "custom@corp.local"
 
 
+def test_execute_prefers_server_injected_smtp_host_over_local_config():
+    """Server-side mail-server override (server/app.py's
+    _apply_mail_server_override) lands in params.smtp_host/smtp_port and
+    should win over whatever's in this host's local config.yaml -- see
+    this module's docstring."""
+    mock_smtp = _mock_smtp()
+    with patch("actions.email_send.smtplib.SMTP", return_value=mock_smtp) as smtp_cls:
+        execute(
+            {"to": "x@corp.local", "smtp_host": "mail01.corp.local", "smtp_port": 2525},
+            {"smtp": {"host": "127.0.0.1", "port": 1025}},
+        )
+
+    smtp_cls.assert_called_once_with("mail01.corp.local", 2525, timeout=10)
+
+
+def test_execute_falls_back_to_local_config_when_no_smtp_override_in_params():
+    mock_smtp = _mock_smtp()
+    with patch("actions.email_send.smtplib.SMTP", return_value=mock_smtp) as smtp_cls:
+        execute({"to": "x@corp.local"}, {"smtp": {"host": "127.0.0.1", "port": 1025}})
+
+    smtp_cls.assert_called_once_with("127.0.0.1", 1025, timeout=10)
+
+
 def test_execute_authenticates_when_credentials_configured():
     mock_smtp = _mock_smtp()
     with patch("actions.email_send.smtplib.SMTP", return_value=mock_smtp):

@@ -591,6 +591,32 @@ def test_settings_rejects_unknown_provider(client):
     assert resp.status_code == 422
 
 
+def test_default_settings_have_no_mail_server_configured(client):
+    resp = client.get("/settings")
+    body = resp.json()
+    assert body["mail_server_host"] is None
+    assert body["mail_server_port"] is None
+
+
+def test_mail_server_settings_round_trip(client):
+    # Not a secret -- echoed back plainly, unlike the remote-install
+    # credentials below.
+    resp = client.put(
+        "/settings", json={"mail_server_host": "mail01.corp.local", "mail_server_port": 2525}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mail_server_host"] == "mail01.corp.local"
+    assert body["mail_server_port"] == 2525
+
+
+def test_mail_server_port_rejects_out_of_range(client):
+    resp = client.put("/settings", json={"mail_server_host": "mail01.corp.local", "mail_server_port": 0})
+    assert resp.status_code == 422
+    resp = client.put("/settings", json={"mail_server_host": "mail01.corp.local", "mail_server_port": 70000})
+    assert resp.status_code == 422
+
+
 def test_default_settings_have_no_remote_install_credentials(client):
     resp = client.get("/settings")
     body = resp.json()
@@ -858,6 +884,54 @@ def content_brief_scenario(tmp_path, monkeypatch):
 def _email_params(ledger):
     entry = next(e for e in ledger.values() if e["spec"]["action_type"] == "email_send")
     return entry["spec"]["params"]
+
+
+# ---- mail server override (Settings -> General) ----------------------
+
+
+def test_mail_server_host_injected_into_email_send_params(client, content_brief_scenario):
+    client.put("/settings", json={"mail_server_host": "mail01.corp.local", "mail_server_port": 2525})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 1})
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _email_params(ledger)
+
+    assert params["smtp_host"] == "mail01.corp.local"
+    assert params["smtp_port"] == 2525
+
+
+def test_mail_server_override_applies_even_to_seeded_replay(client, content_brief_scenario):
+    """Unlike live content generation, this isn't gated on seed being
+    unset -- see _apply_mail_server_override's docstring for why."""
+    client.put("/settings", json={"mail_server_host": "mail01.corp.local"})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 42})
+    assert resp.status_code == 200
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    assert _email_params(ledger)["smtp_host"] == "mail01.corp.local"
+
+
+def test_mail_server_not_injected_when_unconfigured(client, content_brief_scenario):
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 1})
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _email_params(ledger)
+
+    assert "smtp_host" not in params
+    assert "smtp_port" not in params
+
+
+def test_mail_server_port_not_injected_when_only_host_is_missing(client, content_brief_scenario):
+    """A port with no host configured is meaningless -- nothing gets
+    injected at all (see _apply_mail_server_override's `if not host:
+    return` early exit)."""
+    client.put("/settings", json={"mail_server_port": 2525})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 1})
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _email_params(ledger)
+
+    assert "smtp_host" not in params
+    assert "smtp_port" not in params
 
 
 @patch("app.content_gen.generate_content")

@@ -107,6 +107,31 @@
               </div>
             </div>
 
+            <h2 style="font-size:0.85rem; margin-top:1.1rem">Mail server</h2>
+            <p class="hint" style="margin-top:0">
+              The single SMTP relay every simulated user's <code>email_send</code> actions send
+              through, on every host, regardless of airgapped/connected mode above — this is lab
+              infrastructure, not an outbound internet call. Applies to every run launched after
+              you save this, replays included, with no agent reinstall or config change needed.
+              Leave blank and each host falls back to whatever's in its own local
+              <code>config.yaml</code>.
+              Recommended: <a href="https://github.com/mailhog/MailHog" target="_blank" rel="noopener">MailHog</a>
+              — a real SMTP listener (so this produces genuine network traffic, not a mock) with
+              zero mailbox/account setup and a web UI to inspect what was "sent"; this is what
+              this project's own docs and tests use. Point it at MailHog's SMTP port (<code>1025</code>
+              by default).
+            </p>
+            <div class="row">
+              <label>
+                Host
+                <input id="mail-server-host-input" type="text" placeholder="mail01.corp.local">
+              </label>
+              <label>
+                Port <span class="hint">(defaults to 25 if left blank)</span>
+                <input id="mail-server-port-input" type="number" min="1" max="65535" placeholder="1025">
+              </label>
+            </div>
+
             <button type="submit">Save settings</button>
           </form>
           <div id="settings-result" class="result"></div>
@@ -199,6 +224,6 @@
 
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=3"></script>
-<script src="settings.js?v=5"></script>
+<script src="settings.js?v=6"></script>
 </body>
 </html>

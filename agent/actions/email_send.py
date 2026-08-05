@@ -2,9 +2,26 @@
 email_send: send a real email to a puppet mailbox via the range's internal
 mail server.
 
-Real smtplib delivery against the puppet SMTP server, configured under the
-`smtp:` block in config.yaml (host/port/from_addr/credentials). Two ways
-a message's content gets decided, checked in this order:
+Real smtplib delivery against the puppet SMTP server. The relay's
+host/port come from one of two places, checked in this order:
+
+  1. params.smtp_host (+ params.smtp_port, if set) -- the server injected
+     these at run-launch time from Settings -> General's "Mail server"
+     fields (see server/app.py's _apply_mail_server_override), so
+     changing that setting takes effect on the next launched run with no
+     agent-side config change needed.
+  2. Otherwise, the `smtp:` block in this host's own config.yaml
+     (host/port/from_addr/credentials) -- always available as a
+     fallback, e.g. for a host whose config.yaml predates this server-
+     side override existing.
+
+from_addr/use_tls/username/password/timeout always come from the local
+config.yaml regardless -- only the relay's address is ever pushed by the
+server, since those other fields are either not part of "which server to
+talk to" or (credentials) not something that should ride in a per-run
+ActionSpec at all.
+
+Two ways a message's content gets decided, checked in this order:
 
   1. params.subject + params.body already set -- the server generated
      these live (see server/app.py's _apply_live_content /
@@ -59,8 +76,10 @@ def _render_template(name: str, context: dict) -> tuple[str, str]:
 
 def execute(params: dict, config: dict | None = None) -> dict:
     smtp_cfg = (config or {}).get("smtp", {})
-    host = smtp_cfg.get("host", "localhost")
-    port = smtp_cfg.get("port", 25)
+    # The relay's address: server-injected params win when present (see
+    # this module's docstring), local config.yaml is the fallback.
+    host = params.get("smtp_host") or smtp_cfg.get("host", "localhost")
+    port = params.get("smtp_port") or smtp_cfg.get("port", 25)
     from_addr = smtp_cfg.get("from_addr", "cybersim-noreply@corp.local")
     use_tls = smtp_cfg.get("use_tls", False)
     username = smtp_cfg.get("username")

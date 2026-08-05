@@ -282,6 +282,62 @@ Scenarios can carry two kinds of extra metadata beyond `persona`:
   into `POST /runs` (and the recurring-schedule scheduler loop, which
   shares the same `_launch_run` core).
 
+### Mail server
+
+Every simulated user's `email_send` actions, across every org, send
+through a single shared SMTP relay -- not a real per-org mail server
+doing genuine inter-domain routing between separate organizations. That
+was a deliberate scope call (Option A over Option B when this got
+discussed): a shared relay still produces real, observable SMTP traffic
+crossing whatever VLAN separates the puppet host from wherever the relay
+lives, which is what actually matters for detection-tool validation;
+modeling truly separate per-org mail infrastructure that relays *to each
+other* would be real, additional provisioning work (DNS MX records per
+fictional domain, multiple mail server instances, inter-domain relay
+config) worth doing only if the goal becomes specifically validating
+detection of genuine inter-org mail relay traffic rather than intra-org
+traffic crossing a network boundary. Revisit if that need comes up.
+
+Configure the relay's address once under Settings -> General's "Mail
+server" fields (host + optional port, defaulting to 25) -- **recommended:
+[MailHog](https://github.com/mailhog/MailHog)**, a real SMTP listener
+(so this is genuine wire traffic, not a mock) with zero mailbox/account
+setup and a web UI to inspect what was "sent"; it's what this project's
+own local-dev instructions and `agent/tests/` already point at. Not a
+secret, so unlike the LLM/remote-install credentials it's echoed back
+plainly rather than masked.
+
+This is where the "do agents pick up infrastructure changes automatically"
+question actually gets answered concretely: the configured host/port get
+injected into every `email_send` `ActionSpec`'s `params` at run-launch
+time (`server/app.py`'s `_apply_mail_server_override`), which
+`agent/actions/email_send.py` prefers over its own local `config.yaml`
+`smtp:` block when present. Since agents already poll the server fresh
+for every run's `ActionSpec`s rather than caching anything long-lived,
+changing the relay's address here takes effect on the *next launched
+run* -- no agent reinstall, no per-host config edit, no restart. Unlike
+live content generation above, this isn't gated on an unseeded launch or
+"connected" mode: which physical box handles mail isn't a content-
+determinism concern the way LLM-generated prose is, so it applies to
+every run, seeded replays included.
+
+The same "agents just poll for fresh state" mechanism is *already* how
+`web_browse` targets and `smb_access` shares handle a target moving --
+those live in scenario YAML (`server/scenarios/*.yaml`), which
+`resolve()` reads fresh per launch, so editing a scenario (e.g.
+`fileserver01` moving to a new host) takes effect on the next run with
+no agent-side change either, same as the mail server override. The
+recommended way to make that fully transparent to IP changes
+specifically is what these scenarios already do: reference a stable DNS
+hostname (`fileserver01`, `intranet.corp.local`, ...) rather than a raw
+IP, so the *address* can change (a new file server takes over the same
+name in DNS) without touching scenario content at all -- resolution
+happens live, at the moment each agent actually connects. A literal IP
+baked into scenario content would need the scenario file itself edited
+when that host changes; there's no separate "check for IP updates"
+mechanism beyond the fact that every launched run already re-resolves
+scenario content from whatever's on disk right now.
+
 The installer requires admin (creates a Scheduled Task, not a Windows
 service -- a puppet host is meant to look like a real logged-in user
 working, which is also what a real user's session actually *is*, so the
