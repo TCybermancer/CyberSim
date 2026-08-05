@@ -35,7 +35,6 @@ On Linux:
 ```bash
 mkdir cybersim-server && cd cybersim-server
 curl -LO https://raw.githubusercontent.com/TCybermancer/CyberSim/main/server/docker-compose.yml
-export CYBERSIM_ADMIN_PASSWORD='replace-with-a-long-random-password'
 docker compose pull
 docker compose up -d
 ```
@@ -51,34 +50,49 @@ Invoke-WebRequest `
   -Uri "https://raw.githubusercontent.com/TCybermancer/CyberSim/main/server/docker-compose.yml" `
   -OutFile "docker-compose.yml"
 
-$env:CYBERSIM_ADMIN_PASSWORD = "replace-with-a-long-random-password"
 docker compose pull
 docker compose up -d
 ```
 
-Open `http://localhost:8000/ui/`. Use `docker compose logs -f` to follow
-the server logs, `docker compose restart` to restart it, and `docker
-compose down` to stop it. The named data volume survives `down`; do not
-use `docker compose down -v` unless you intend to delete CyberSim's data.
+Open `http://localhost:8000/ui/` and log in with the built-in `admin`
+account -- password `admin` unless you pinned a different one (see
+below) -- then change it right away under Settings -> Security; see
+"Auth" below. Use `docker compose logs -f` to follow the server logs,
+`docker compose restart` to restart it, and `docker compose down` to
+stop it. The named data volume survives `down`; do not use `docker
+compose down -v` unless you intend to delete CyberSim's data.
 
-To update a Linux installation later:
+**Optional: pin the admin password up front instead of using the
+default.** Worth doing for any internet-reachable deployment, so the
+`admin`/`admin` default is never live even briefly. Set
+`CYBERSIM_ADMIN_PASSWORD` before `docker compose up`:
+
+```bash
+export CYBERSIM_ADMIN_PASSWORD='replace-with-a-long-random-password'
+```
+
+```powershell
+$env:CYBERSIM_ADMIN_PASSWORD = "replace-with-a-long-random-password"
+```
+
+It only takes effect on a startup where it's actually set -- a later
+`docker compose up -d` without it won't reset a password you've since
+changed via Settings -> Security.
+
+To update later:
 
 ```bash
 cd cybersim-server
-export CYBERSIM_ADMIN_PASSWORD='the-same-password-or-a-new-one'
 docker compose pull
 docker compose up -d
 ```
 
-On Windows, set `$env:CYBERSIM_ADMIN_PASSWORD` in the new PowerShell
-session, then run the same `docker compose pull` and `docker compose up -d`
-commands from the `CyberSim-Server` directory.
-
 For a one-command deployment without Compose, create a named volume and use
 `docker run -d --name cybersim-server --restart unless-stopped -p 8000:8000
--v cybersim-data:/data -e CYBERSIM_ADMIN_PASSWORD='replace-me'
-ghcr.io/tcybermancer/cybersim-server:latest`. Building from source remains
-available with `docker build -t cybersim-server:local server` from a clone.
+-v cybersim-data:/data ghcr.io/tcybermancer/cybersim-server:latest` (add
+`-e CYBERSIM_ADMIN_PASSWORD='replace-me'` to pin a password instead of the
+default). Building from source remains available with `docker build -t
+cybersim-server:local server` from a clone.
 
 The SQLite DB lives at `/data` inside the container (`CYBERSIM_DB_PATH`,
 read by `db.py`), backed by a named volume so it survives container

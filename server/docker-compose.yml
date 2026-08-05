@@ -13,8 +13,14 @@ services:
       # Uncomment to edit scenarios without rebuilding the image:
       # - ./scenarios:/app/scenarios
     environment:
-      # Refuse to start until the operator supplies a non-default password.
-      CYBERSIM_ADMIN_PASSWORD: "${CYBERSIM_ADMIN_PASSWORD:?Set CYBERSIM_ADMIN_PASSWORD before starting CyberSim}"
+      # Optional. Unset (the default), the built-in 'admin' account
+      # bootstraps with the password "admin" -- change it under Settings
+      # -> Security after first login. Set this to pin a real password
+      # from the first startup instead, e.g. for an internet-reachable
+      # deployment; it only takes effect on startups where it's actually
+      # set, so a later `docker compose up -d` without it won't reset a
+      # password you've since changed.
+      CYBERSIM_ADMIN_PASSWORD: "${CYBERSIM_ADMIN_PASSWORD:-}"
     restart: unless-stopped
 
 volumes:
