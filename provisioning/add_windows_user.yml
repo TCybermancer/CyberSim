@@ -9,17 +9,38 @@
 # windows_hosts and domain_controller groups should resolve to OOB IPs
 # only. See docs/README.md.
 #
+# This playbook only creates the account(s) -- it doesn't install the
+# cybersim agent itself. That's a separate step, and there are two ways
+# to do it once this user exists:
+#   1. Log in as target_user and use the dashboard's own install page
+#      (http://<server>/ui/install.html, Windows tab) -- downloads
+#      cybersim-agent-setup.exe, which autostarts via a Scheduled Task
+#      at logon.
+#   2. From the dashboard's Install agent -> Remote Install tab (or
+#      POST /install/remote), which does the equivalent over WinRM
+#      itself -- the same OOB connectivity this playbook already used
+#      to reach the host, so no extra network path to open up.
+# An earlier version of this playbook tried to install the agent
+# directly (copying agent/ source, running it as a Windows service) --
+# superseded once the real installer shipped (PyInstaller .exe + auto-
+# filled config.yaml + Scheduled-Task-at-logon autostart, deliberately
+# not a service, so a puppet host looks like a real logged-in user
+# working -- see docs/README.md).
+#
 # Usage:
 #   ansible-playbook -i inventory.ini add_windows_user.yml \
 #     -e "target_user=jsmith target_persona=finance_analyst target_password=REDACTED"
+# Pass target_password as an ansible-vault-encrypted value (e.g.
+# `ansible-vault encrypt_string`) or via --ask-vault-pass with a vars
+# file, not typed in cleartext on a real shared shell -- see
+# group_vars/all/vault.yml.example's vault_<name> convention.
 
 - name: Provision local puppet user on the Windows host
   hosts: windows_hosts
   vars:
     target_user: "changeme"
     target_persona: "generic"
-    target_password: "changeme"  # TODO: pull from vault, never plaintext in real use
-    agent_install_dir: "C:\\cybersim-agent"
+    target_password: "changeme"
 
   tasks:
     - name: Ensure local puppet user exists
@@ -30,28 +51,6 @@
         groups:
           - Users
         description: "cybersim puppet ({{ target_persona }})"
-
-    - name: Create agent install directory
-      ansible.windows.win_file:
-        path: "{{ agent_install_dir }}"
-        state: directory
-
-    - name: Copy agent code
-      ansible.windows.win_copy:
-        src: ../agent/
-        dest: "{{ agent_install_dir }}\\"
-
-    # TODO (Claude Code): render config.yaml, ensure Python is present
-    # (or ship a PyInstaller-built agent.exe to avoid a Python dependency
-    # on every puppet host), then install as a Windows service via
-    # ansible.windows.win_service or nssm.
-
-    - name: Install cybersim agent as a Windows service
-      ansible.windows.win_service:
-        name: cybersim-agent
-        path: '"{{ agent_install_dir }}\agent.exe" --config "{{ agent_install_dir }}\config.yaml"'
-        start_mode: auto
-        state: started
 
 - name: Optionally create the matching AD account on the domain controller
   hosts: domain_controller
