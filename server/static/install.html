@@ -40,44 +40,91 @@
     </div>
 
     <div class="card" id="download-card">
-      <h2>Install the Windows agent</h2>
-      <p class="hint" style="margin-top:0">
-        Downloads a Windows installer pre-linked to <strong id="server-url-display">this server</strong> —
-        its setup wizard opens with the server address, host ID, and persona already filled in below.
-        You can still change anything before finishing the install.
-      </p>
+      <div class="tab-bar" role="tablist">
+        <button type="button" id="tab-btn-windows" class="tab-button active" role="tab" aria-selected="true">Windows</button>
+        <button type="button" id="tab-btn-linux" class="tab-button" role="tab" aria-selected="false">Linux</button>
+      </div>
 
-      <form id="download-form" action="/install/agent-bundle" method="get">
-        <label>
-          Host ID <span class="hint">(must match a scenario's "hosts" list on the server)</span>
-          <input id="host-id-input" name="host_id" type="text" placeholder="FIN-WKS03" required>
-        </label>
-        <label>
-          Persona
-          <input id="persona-input" name="persona" type="text" placeholder="finance_analyst" value="default">
-        </label>
-        <button type="submit">Download Windows Agent Installer</button>
-      </form>
-    </div>
+      <div id="tab-windows" role="tabpanel">
+        <h2>Install the Windows agent</h2>
+        <p class="hint" style="margin-top:0">
+          Downloads a Windows installer pre-linked to <strong class="server-url-display">this server</strong> —
+          its setup wizard opens with the server address, host ID, and persona already filled in below.
+          You can still change anything before finishing the install.
+        </p>
 
-    <div class="card">
-      <h2>After downloading</h2>
-      <ol class="hint" style="padding-left:1.1rem; line-height:1.6;">
-        <li>Unzip <code>cybersim-agent-installer.zip</code> and run <code>cybersim-agent-setup.exe</code>.</li>
-        <li>The wizard's "Orchestrator Connection" page opens pre-filled — confirm or edit the values, then finish.</li>
-        <li>The agent registers itself and starts automatically the next time this Windows user logs in
-          (it simulates one logged-in user's activity, so it runs at logon, not as a background service —
-          see docs/README.md). Launch it immediately from the installer's final page if you don't want to wait.</li>
-      </ol>
-      <p class="hint">
-        Prefer a hands-off setup? The zip also works unattended:
-        <code>cybersim-agent-setup.exe /VERYSILENT</code> uses the same pre-filled values with no prompts.
-      </p>
+        <form id="download-form-windows" action="/install/agent-bundle" method="get">
+          <input type="hidden" name="os" value="windows">
+          <label>
+            Host ID <span class="hint">(must match a scenario's "hosts" list on the server)</span>
+            <input id="host-id-input-windows" class="host-id-input" name="host_id" type="text" placeholder="FIN-WKS03" required>
+          </label>
+          <label>
+            Persona
+            <input name="persona" type="text" placeholder="finance_analyst" value="default">
+          </label>
+          <button type="submit">Download Windows Agent Installer</button>
+        </form>
+
+        <h2 style="margin-top:1.3rem">After downloading</h2>
+        <ol class="hint" style="padding-left:1.1rem; line-height:1.6;">
+          <li>Unzip <code>cybersim-agent-installer.zip</code> and run <code>cybersim-agent-setup.exe</code>.</li>
+          <li>The wizard's "Orchestrator Connection" page opens pre-filled — confirm or edit the values, then finish.</li>
+          <li>The agent registers itself and starts automatically the next time this Windows user logs in
+            (it simulates one logged-in user's activity, so it runs at logon, not as a background service —
+            see docs/README.md). Launch it immediately from the installer's final page if you don't want to wait.</li>
+        </ol>
+        <p class="hint">
+          Prefer a hands-off setup? The zip also works unattended:
+          <code>cybersim-agent-setup.exe /VERYSILENT</code> uses the same pre-filled values with no prompts.
+        </p>
+      </div>
+
+      <div id="tab-linux" role="tabpanel" style="display:none">
+        <h2>Install the Linux agent</h2>
+        <p class="hint" style="margin-top:0">
+          Downloads a tarball pre-linked to <strong class="server-url-display">this server</strong> — its
+          install script prompts with the server address, host ID, and persona already filled in as
+          defaults. You can still change anything before it finishes.
+        </p>
+
+        <form id="download-form-linux" action="/install/agent-bundle" method="get">
+          <input type="hidden" name="os" value="linux">
+          <label>
+            Host ID <span class="hint">(must match a scenario's "hosts" list on the server)</span>
+            <input id="host-id-input-linux" class="host-id-input" name="host_id" type="text" placeholder="FIN-WKS03" required>
+          </label>
+          <label>
+            Persona
+            <input name="persona" type="text" placeholder="finance_analyst" value="default">
+          </label>
+          <button type="submit">Download Linux Agent Installer</button>
+        </form>
+
+        <h2 style="margin-top:1.3rem">After downloading</h2>
+        <ol class="hint" style="padding-left:1.1rem; line-height:1.6;">
+          <li>
+            <code>tar xzf cybersim-agent-installer-linux.tar.gz &amp;&amp; ./install.sh</code>
+            — no root required, installs under <code>~/.local/share/cybersim-agent</code>.
+          </li>
+          <li>Confirm or edit the prompted values (server URL, host ID, persona, token), then it finishes.</li>
+          <li>Registers as a <code>systemd --user</code> unit and starts it right away — it also starts
+            automatically at this user's next login (same "looks like a real logged-in user, not a
+            background service" intent as the Windows agent — see docs/README.md). Check on it with
+            <code>systemctl --user status cybersim-agent</code>.</li>
+          <li>Headless host with no interactive login session? Separately run
+            <code>loginctl enable-linger "$USER"</code> so the unit starts even without one.</li>
+        </ol>
+        <p class="hint">
+          Prefer a hands-off setup? <code>./install.sh --silent</code> uses the same pre-filled values
+          with no prompts. <code>./install.sh --uninstall</code> reverses everything.
+        </p>
+      </div>
     </div>
 
     <div class="card">
       <h2>Server-side install</h2>
-      <p class="hint" style="margin-top:0">This page only distributes the Windows agent. To install the orchestrator itself on a new Linux host:</p>
+      <p class="hint" style="margin-top:0">This page only distributes the agent. To install the orchestrator itself on a new Linux host:</p>
       <pre class="preview" style="white-space:pre-wrap">docker compose up -d          # server/docker-compose.yml
 # -- or, no Docker --
 sudo ./install.sh              # server/install.sh, installs as a systemd service</pre>
@@ -89,6 +136,6 @@ sudo ./install.sh              # server/install.sh, installs as a systemd servic
 
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=3"></script>
-<script src="install.js?v=3"></script>
+<script src="install.js?v=4"></script>
 </body>
 </html>

@@ -28,6 +28,12 @@ agent/installer/output/
 # place it here, or build it yourself, before /install/agent-bundle can
 # serve it. See docs/README.md "Installation".
 server/install_artifacts/*.exe
+# Same story for the Linux agent binary (also a build artifact -- see
+# agent/cybersim-agent.spec) and its install script (checked-in source
+# at agent/installer/install-linux.sh, but only a *copy* belongs here --
+# see that file and download_agent_bundle()'s docstring in app.py).
+server/install_artifacts/cybersim-agent
+server/install_artifacts/install-linux.sh
 
 # pytest
 .pytest_cache/

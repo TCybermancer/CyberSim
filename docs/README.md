@@ -121,33 +121,49 @@ that redeploy, runs as the dedicated non-root user, API reachable and
 data persists throughout. `systemctl status cybersim-server` /
 `journalctl -u cybersim-server -f` to check on it.
 
-### Windows agent
+### Agent installation (Windows or Linux)
 
 The easiest path is the server's own install page --
-`http://<server>/ui/install.html` (linked from the dashboard's header).
-Fill in Host ID and Persona, download, run the installer: its
-"Orchestrator Connection" wizard page opens **pre-filled** with this
-server's own address (plus whatever Host ID/Persona you entered) --
-confirm or edit, finish, done. Works unattended too:
-`cybersim-agent-setup.exe /VERYSILENT` applies the same pre-filled values
-with no prompts, for scripted provisioning.
+`http://<server>/ui/install.html` (linked from the dashboard's header),
+which has a tab for each OS. Fill in Host ID and Persona, download, run
+the installer: Windows' "Orchestrator Connection" wizard page (or
+Linux's install script prompts) opens **pre-filled** with this server's
+own address (plus whatever Host ID/Persona you entered) -- confirm or
+edit, finish, done. Both work unattended too, for scripted provisioning:
+Windows' `cybersim-agent-setup.exe /VERYSILENT`, Linux's
+`./install.sh --silent`, apply the same pre-filled values with no
+prompts.
 
-How the auto-link works: `GET /install/agent-bundle?host_id=...&persona=...`
+How the auto-link works: `GET /install/agent-bundle?host_id=...&persona=...&os=windows|linux`
 (`server/app.py`, requires a logged-in dashboard session -- see "Auth"
-below) zips the pre-built installer
-(`server/install_artifacts/cybersim-agent-setup.exe` -- **not** checked
-into git, see "CI / Releases" below for where it comes from) together
-with a freshly generated `install-defaults.txt` sidecar file, one line
-each for server_url (taken from *that request's own* base URL --
-whatever address reached the server is what the agent should reach it at
-too), host_id, persona, and that host's bearer token (minted here on
-first download, reused on later downloads for the same host_id).
-The installer (`agent/installer/cybersim-agent.iss`, Inno Setup) reads
-that sidecar file, if present next to `Setup.exe`, to pre-fill its
-custom wizard page. The installer binary itself is static and never
-regenerated per download -- only the small sidecar file is dynamic,
-which is what keeps this simple and reliable rather than trying to
-patch a compiled `.exe` per request.
+below) zips (Windows) or tars (Linux) the pre-built installer artifacts
+(`server/install_artifacts/` -- **not** checked into git, see "CI /
+Releases" below for where they come from) together with a freshly
+generated `install-defaults.txt` sidecar file, one line each for
+server_url (taken from *that request's own* base URL -- whatever address
+reached the server is what the agent should reach it at too), host_id,
+persona, and that host's bearer token (minted here on first download,
+reused on later downloads for the same host_id). The installer (Windows:
+`agent/installer/cybersim-agent.iss`, Inno Setup; Linux:
+`agent/installer/install-linux.sh`) reads that sidecar file, if present
+next to it, to pre-fill its wizard page or prompts. The installer
+binary/script itself is static and never regenerated per download --
+only the small sidecar file is dynamic, which is what keeps this simple
+and reliable rather than trying to patch a compiled binary per request.
+
+Where the two platforms differ: Windows installs to Program Files
+(admin-elevated, since registering its Scheduled Task needs that) and
+autostarts via a Scheduled Task firing at user logon. Linux installs
+per-user under `~/.local/share/cybersim-agent` -- **no root required**
+-- and autostarts via a `systemd --user` unit, which starts at this
+user's next login (covers both graphical and SSH logins on a systemd
+distro via `pam_systemd`); for a headless host you want it running
+without an active login session, separately run
+`loginctl enable-linger "$USER"`. Both approaches exist for the same
+reason: puppet hosts are meant to look like a real logged-in user
+working, which is also what a real user's session actually is -- not a
+background service. `./install.sh --uninstall` reverses the Linux
+install.
 
 ### Auth
 
@@ -245,7 +261,10 @@ this, worth knowing if you touch `cybersim-agent.iss`:
 
 **Rebuilding the agent installer by hand** (after any agent code change,
 if you're not relying on CI -- see "CI / Releases" below for the
-automated version):
+automated version). PyInstaller can't cross-compile, so build each
+platform's artifact on that platform.
+
+Windows:
 ```bash
 cd agent
 pip install pyinstaller
@@ -259,6 +278,19 @@ iscc cybersim-agent.iss                # needs Inno Setup 6 installed
 
 # then make the server's download page serve the new build:
 cp installer/output/cybersim-agent-setup.exe ../../server/install_artifacts/
+```
+
+Linux:
+```bash
+cd agent
+pip install pyinstaller
+pyinstaller cybersim-agent.spec        # -> dist/cybersim-agent (no installer to
+                                        # build here -- install-linux.sh is
+                                        # plain checked-in source, no compile step)
+
+# then make the server's download page serve the new build:
+cp dist/cybersim-agent installer/install-linux.sh ../server/install_artifacts/
+chmod +x ../server/install_artifacts/cybersim-agent ../server/install_artifacts/install-linux.sh
 ```
 
 ### Testing
@@ -301,21 +333,29 @@ share) to automate. Worth doing eventually; out of scope for now.
 Windows).
 
 `.github/workflows/release.yml` runs after pushes to `main`, version tags,
-or manual dispatch. Its Windows job builds the agent exe and installer
-exactly like the by-hand steps above,
-derives the installer's version from the tag (`cybersim-agent.iss`'s
-`#define MyAppVersion` is `#ifndef`-guarded so `iscc
-/DMyAppVersion=X.Y.Z` can override it without editing the file --
-verified locally that the version string actually lands in the compiled
-binary, not just that it compiles), uploads the build as a workflow
-artifact always, and additionally attaches it to a GitHub Release when
-triggered by a real tag. A dependent Linux job embeds that same installer
-in the server image and publishes `ghcr.io/tcybermancer/cybersim-server`
-with `latest`, commit-SHA, and (for releases) semantic-version tags. Source
-deployments can grab the latest release's
-`cybersim-agent-setup.exe` and place it at
-`server/install_artifacts/cybersim-agent-setup.exe` (or build it
-yourself per above) before `/install/agent-bundle` has anything to
-serve -- that file is `.gitignore`d on purpose now: a checked-in binary
-grows the repo forever since git can't meaningfully diff it, and this
-already tripped GitHub's 50MB size warning twice.
+or manual dispatch, with three jobs. Its Windows job builds the agent exe
+and installer exactly like the by-hand steps above, deriving the
+installer's version from the tag (`cybersim-agent.iss`'s `#define
+MyAppVersion` is `#ifndef`-guarded so `iscc /DMyAppVersion=X.Y.Z` can
+override it without editing the file -- verified locally that the
+version string actually lands in the compiled binary, not just that it
+compiles). A separate Linux job builds the agent binary the same way and
+packages it with `install-linux.sh` into a standalone tarball. Both jobs
+upload their build as a workflow artifact always, and additionally
+attach it to a GitHub Release when triggered by a real tag. A third job,
+depending on both, embeds both platforms' artifacts in the server image
+and publishes `ghcr.io/tcybermancer/cybersim-server` with `latest`,
+commit-SHA, and (for releases) semantic-version tags.
+
+Source deployments can grab the latest release's artifacts and place
+them at `server/install_artifacts/cybersim-agent-setup.exe` (Windows) and
+`server/install_artifacts/cybersim-agent` +
+`server/install_artifacts/install-linux.sh` (Linux, both `chmod +x`'d --
+or build them yourself per above) before `/install/agent-bundle` has
+anything to serve for that platform -- all three are `.gitignore`d on
+purpose: a checked-in binary grows the repo forever since git can't
+meaningfully diff it (already tripped GitHub's 50MB size warning twice
+before this became CI-driven), and the shell script, while small enough
+to check in, is only ever a copy of the real source at
+`agent/installer/install-linux.sh` -- keeping both in git would just
+invite them drifting apart.

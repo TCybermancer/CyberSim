@@ -64,8 +64,54 @@ jobs:
           files: agent/installer/output/cybersim-agent-setup.exe
           generate_release_notes: true
 
+  build-linux-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install agent dependencies
+        working-directory: agent
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build agent binary
+        working-directory: agent
+        run: pyinstaller cybersim-agent.spec
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cybersim-agent-linux
+          path: agent/dist/cybersim-agent
+
+      - name: Package release tarball
+        # A standalone bundle for anyone grabbing it straight off the
+        # GitHub Releases page rather than through the dashboard's
+        # /install/agent-bundle (which adds its own per-server sidecar
+        # file -- see app.py's download_agent_bundle) -- so it has no
+        # install-defaults.txt, just the binary and the install script.
+        if: github.ref_type == 'tag'
+        run: |
+          mkdir -p release-linux
+          cp agent/dist/cybersim-agent release-linux/
+          cp agent/installer/install-linux.sh release-linux/install.sh
+          chmod +x release-linux/cybersim-agent release-linux/install.sh
+          tar czf cybersim-agent-linux.tar.gz -C release-linux .
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cybersim-agent-linux.tar.gz
+          generate_release_notes: true
+
   publish-server-image:
-    needs: build-and-release
+    needs: [build-and-release, build-linux-agent]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -78,6 +124,23 @@ jobs:
         with:
           name: cybersim-agent-setup
           path: server/install_artifacts
+
+      - name: Download Linux agent binary
+        uses: actions/download-artifact@v4
+        with:
+          name: cybersim-agent-linux
+          path: server/install_artifacts
+
+      - name: Copy Linux install script and set executable bits
+        # The Linux artifacts need to actually be executable inside the
+        # image -- download-artifact doesn't reliably preserve the exec
+        # bit, and this script is checked-in source (not a build output),
+        # so it isn't part of the uploaded artifact at all. Belt-and-
+        # suspenders with download_agent_bundle()'s own _force_executable
+        # (app.py), which re-asserts this regardless at download time.
+        run: |
+          cp agent/installer/install-linux.sh server/install_artifacts/install-linux.sh
+          chmod +x server/install_artifacts/cybersim-agent server/install_artifacts/install-linux.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

@@ -25,11 +25,12 @@ Agents on the in-band range network reach this API only via their OOB NIC
   DELETE /schedules/{id}        cancel a schedule
   POST /runs/{id}/score         score a run's ledger against an uploaded detection-tool
                                 alert export (for the UI's scoring view; see scoring_core.py)
-  GET  /install/agent-bundle   zips the pre-built Windows agent installer with a
-                                per-request sidecar file pre-filling its wizard
-                                with *this* server's own address (see
-                                install_artifacts/ and agent/installer/) -- also
-                                mints/reuses that host's bearer token (see auth.py)
+  GET  /install/agent-bundle   zips/tars the pre-built agent installer (?os=windows,
+                                the default, or ?os=linux) with a per-request sidecar
+                                file pre-filling its wizard/prompts with *this*
+                                server's own address (see install_artifacts/ and
+                                agent/installer/) -- also mints/reuses that host's
+                                bearer token (see auth.py)
   POST /auth/login             dashboard login (sets a session cookie); see auth.py
   POST /auth/logout            clears the session cookie
   GET  /auth/me                who's logged in and their role (for the UI to hide/disable
@@ -64,6 +65,7 @@ import asyncio
 import hmac
 import io
 import os
+import tarfile
 import uuid
 import zipfile
 from datetime import datetime, timedelta
@@ -87,6 +89,8 @@ SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 STATIC_DIR = Path(__file__).parent / "static"
 INSTALL_ARTIFACTS_DIR = Path(__file__).parent / "install_artifacts"
 AGENT_INSTALLER_NAME = "cybersim-agent-setup.exe"
+AGENT_LINUX_BINARY_NAME = "cybersim-agent"
+AGENT_LINUX_INSTALL_SCRIPT_NAME = "install-linux.sh"
 
 app = FastAPI(title="cybersim-orchestrator")
 
@@ -830,40 +834,98 @@ def agents_live_status():
 _SAFE_TOKEN = r"^[A-Za-z0-9._-]{0,64}$"
 
 
+def _force_executable(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
+    """tarfile.add() otherwise copies whatever mode bits the source file
+    happens to have on *this* filesystem -- which may not mean anything
+    (e.g. if this server itself runs on Windows for a source deployment,
+    or the artifact arrived via a CI step that didn't preserve the
+    executable bit). Force it explicitly so the extracted binary/script
+    are always runnable regardless of how install_artifacts/ was
+    populated."""
+    tarinfo.mode = 0o755
+    return tarinfo
+
+
 @app.get("/install/agent-bundle", dependencies=[Depends(require_admin)])
 def download_agent_bundle(
     request: Request,
     host_id: str = Query(default="", pattern=_SAFE_TOKEN),
     persona: str = Query(default="default", pattern=_SAFE_TOKEN),
+    os_name: str = Query(default="windows", alias="os", pattern=r"^(windows|linux)$"),
 ):
-    """Zips the pre-built Windows agent installer with a per-request
-    install-defaults.txt sidecar file -- server_url taken from *this
-    request's own* base URL, plus the given host_id/persona, plus that
-    host's bearer token (minted here on first download, reused on later
+    """Zips (Windows) or tars (Linux) the pre-built agent installer with a
+    per-request sidecar file -- server_url taken from *this request's
+    own* base URL, plus the given host_id/persona, plus that host's
+    bearer token (minted here on first download, reused on later
     downloads for the same host_id so re-downloading for troubleshooting
     doesn't invalidate an already-installed agent's credential) -- so the
     download auto-links to whichever server it was fetched from without
-    needing to rebuild or re-sign the installer per request. See
-    agent/installer/cybersim-agent.iss for how the installer's wizard
-    reads this file.
+    needing to rebuild or re-sign the installer per request.
+
+    Windows (?os=windows, the default): install-defaults.txt alongside
+    cybersim-agent-setup.exe -- see agent/installer/cybersim-agent.iss
+    for how the installer's wizard reads it.
+
+    Linux (?os=linux): install-defaults.txt alongside the cybersim-agent
+    binary and install-linux.sh -- see that script for how it reads it
+    (same 4-line format, just consumed by a shell prompt loop instead of
+    an Inno Setup wizard page).
 
     Gated behind a dashboard session (see require_dashboard_session
     middleware) since this is what actually issues live agent
     credentials now -- only a logged-in operator should be able to mint
     one. host_id/persona are still restricted to a safe charset (rather
     than just escaped) as defense in depth, since both flow into another
-    process's string-concatenated YAML (the installer's Pascal script);
-    a value with an embedded quote/newline could otherwise inject
-    arbitrary config.yaml content on whoever runs the installer. The
-    installer also escapes defensively on its side (see
-    cybersim-agent.iss's YamlEscape) in case this sidecar file is ever
+    process's string-concatenated YAML (the Windows installer's Pascal
+    script; install-linux.sh's own shell variables). A value with an
+    embedded quote/newline could otherwise inject arbitrary config.yaml
+    content on whoever runs the installer. Both installers also escape
+    defensively on their own side (cybersim-agent.iss's YamlEscape;
+    install-linux.sh's yaml_escape) in case this sidecar file is ever
     hand-edited instead of generated here.
 
-    install_artifacts/cybersim-agent-setup.exe is a build artifact, not
-    built by this server. Release CI embeds its Windows installer in the
-    published server image; source deployments must build or download it
-    separately and copy it here. See docs/README.md.
+    install_artifacts/{cybersim-agent-setup.exe, cybersim-agent,
+    install-linux.sh} are build artifacts (or, for the Linux shell
+    script, just a copy of checked-in source), not built by this server.
+    Release CI embeds them in the published server image; source
+    deployments must build/copy them here separately. See docs/README.md.
     """
+    server_url = str(request.base_url).rstrip("/")
+    token = ""
+    if host_id:
+        token = db.get_agent_token(host_id) or auth.new_token()
+        db.save_agent_token(host_id, token, datetime.utcnow().isoformat())
+    defaults = "\n".join([server_url, host_id, persona, token])
+
+    if os_name == "linux":
+        binary_path = INSTALL_ARTIFACTS_DIR / AGENT_LINUX_BINARY_NAME
+        script_path = INSTALL_ARTIFACTS_DIR / AGENT_LINUX_INSTALL_SCRIPT_NAME
+        missing = [p.name for p in (binary_path, script_path) if not p.exists()]
+        if missing:
+            raise HTTPException(
+                404,
+                f"{' and '.join(missing)} not found in install_artifacts/ -- build/copy "
+                "them (see agent/installer/install-linux.sh) and place them there.",
+            )
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            tf.add(binary_path, arcname=AGENT_LINUX_BINARY_NAME, filter=_force_executable)
+            tf.add(script_path, arcname=AGENT_LINUX_INSTALL_SCRIPT_NAME, filter=_force_executable)
+            defaults_bytes = defaults.encode()
+            defaults_info = tarfile.TarInfo(name="install-defaults.txt")
+            defaults_info.size = len(defaults_bytes)
+            tf.addfile(defaults_info, io.BytesIO(defaults_bytes))
+        buf.seek(0)
+
+        return StreamingResponse(
+            buf,
+            media_type="application/gzip",
+            headers={
+                "Content-Disposition": 'attachment; filename="cybersim-agent-installer-linux.tar.gz"'
+            },
+        )
+
     installer_path = INSTALL_ARTIFACTS_DIR / AGENT_INSTALLER_NAME
     if not installer_path.exists():
         raise HTTPException(
@@ -871,13 +933,6 @@ def download_agent_bundle(
             f"{AGENT_INSTALLER_NAME} not found in install_artifacts/ -- build it "
             "(see agent/installer/cybersim-agent.iss) and place it there.",
         )
-
-    server_url = str(request.base_url).rstrip("/")
-    token = ""
-    if host_id:
-        token = db.get_agent_token(host_id) or auth.new_token()
-        db.save_agent_token(host_id, token, datetime.utcnow().isoformat())
-    defaults = "\n".join([server_url, host_id, persona, token])
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

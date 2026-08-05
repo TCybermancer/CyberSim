@@ -3,6 +3,7 @@ TestClient. Each test gets an isolated throwaway DB via
 server/conftest.py's autouse isolated_db fixture."""
 
 import io
+import tarfile
 import zipfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -246,6 +247,69 @@ def test_install_bundle_reuses_token_on_repeat_download(client, tmp_path, monkey
         return zf.read("install-defaults.txt").decode().splitlines()[3]
 
     assert token_from(first) == token_from(second)
+
+
+def test_install_bundle_linux_404s_when_artifacts_missing(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    resp = client.get("/install/agent-bundle", params={"host_id": "H1", "os": "linux"})
+    assert resp.status_code == 404
+
+
+def test_install_bundle_linux_404s_when_only_binary_present(client, tmp_path, monkeypatch):
+    """Both the binary and the install script are required -- one alone
+    isn't a usable bundle."""
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_LINUX_BINARY_NAME).write_bytes(b"fake elf binary")
+    resp = client.get("/install/agent-bundle", params={"host_id": "H1", "os": "linux"})
+    assert resp.status_code == 404
+
+
+def test_install_bundle_linux_tars_binary_script_and_sidecar(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_LINUX_BINARY_NAME).write_bytes(b"fake elf binary")
+    (tmp_path / app_module.AGENT_LINUX_INSTALL_SCRIPT_NAME).write_text("#!/usr/bin/env bash\n")
+
+    resp = client.get(
+        "/install/agent-bundle",
+        params={"host_id": "H1", "persona": "finance_analyst", "os": "linux"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/gzip"
+
+    tf = tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz")
+    names = set(tf.getnames())
+    assert names == {
+        app_module.AGENT_LINUX_BINARY_NAME,
+        app_module.AGENT_LINUX_INSTALL_SCRIPT_NAME,
+        "install-defaults.txt",
+    }
+
+    # Both the binary and script must come out executable regardless of
+    # whatever mode bits the source files had on this filesystem.
+    assert tf.getmember(app_module.AGENT_LINUX_BINARY_NAME).mode == 0o755
+    assert tf.getmember(app_module.AGENT_LINUX_INSTALL_SCRIPT_NAME).mode == 0o755
+
+    lines = tf.extractfile("install-defaults.txt").read().decode().splitlines()
+    assert lines[0].startswith("http://")
+    assert lines[1] == "H1"
+    assert lines[2] == "finance_analyst"
+    assert lines[3] == db.get_agent_token("H1")
+    assert lines[3]  # non-empty
+
+
+def test_install_bundle_defaults_to_windows_when_os_omitted(client, tmp_path, monkeypatch):
+    """Backward compatibility: existing callers (and the dashboard's
+    Windows tab) don't pass ?os at all."""
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_INSTALLER_NAME).write_bytes(b"fake installer bytes")
+    resp = client.get("/install/agent-bundle", params={"host_id": "H1"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+
+
+def test_install_bundle_rejects_unknown_os(client):
+    resp = client.get("/install/agent-bundle", params={"host_id": "H1", "os": "macos"})
+    assert resp.status_code == 422
 
 
 # ---- auth gate itself -------------------------------------------------

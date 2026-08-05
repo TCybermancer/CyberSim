@@ -65,8 +65,8 @@ accounts, API keys) in scenario configs for a system this touches.
 - **Front-end** (`server/static/`): a static, dependency-free HTML/JS
   page FastAPI serves itself at `/ui/` (no build step, no CDN calls —
   this may run in an air-gapped range), including `/ui/install.html` for
-  downloading the Windows agent installer (see "Installation" below).
-  Browse scenarios, pick registered hosts, launch a run, and watch its
+  downloading the agent installer, Windows or Linux (see "Installation"
+  below). Browse scenarios, pick registered hosts, launch a run, and watch its
   ledger fill in live. It's a thin client over the read-only GET
   endpoints below; it doesn't add any write
   capability the API didn't already have.
@@ -293,9 +293,16 @@ out in real execution time the way their `intended_start` implies --
 - Installation: `server/Dockerfile` + `docker-compose.yml`, `server/
   install.sh` + `systemd/` (native, no Docker), `agent/cybersim-agent.spec`
   + `agent/installer/cybersim-agent.iss` (Windows installer, PyInstaller +
-  Inno Setup) and `GET /install/agent-bundle` (the auto-linking download
-  page at `/ui/install.html`). See "Installation" below — all four paths
-  verified by hand end to end, not just written.
+  Inno Setup) + `agent/installer/install-linux.sh` (Linux installer, same
+  PyInstaller binary + a plain shell script instead of Inno Setup — per-
+  user install, `systemd --user` unit instead of a Scheduled Task) and
+  `GET /install/agent-bundle` (the auto-linking download page at
+  `/ui/install.html`, now with a tab per OS). See "Installation" below —
+  the server/Docker/native-service paths and the Windows agent installer
+  are all verified by hand end to end; the Linux installer's config.yaml/
+  YAML-escaping and `--uninstall` logic were exercised with a mocked
+  `systemctl` (no real systemd host available while building it) —
+  worth a real run on an actual Linux box before relying on it.
 - Automated tests (`server/tests/`, `scoring/tests/`, `agent/tests/`,
   70 tests) and CI (`.github/workflows/`) — see "Testing" and "CI /
   Releases" below for scope (full coverage for `server`/`scoring`; agent
