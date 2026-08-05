@@ -10,7 +10,7 @@
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=13">
+<link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
 <div class="app-shell">
@@ -35,6 +35,7 @@
       <div class="tab-bar" role="tablist">
         <button type="button" id="tab-btn-general" class="tab-button active" role="tab" aria-selected="true">General</button>
         <button type="button" id="tab-btn-security" class="tab-button" role="tab" aria-selected="false">Security</button>
+        <button type="button" id="tab-btn-remote-install" class="tab-button" role="tab" aria-selected="false">Remote Install</button>
       </div>
 
       <div id="tab-general" role="tabpanel">
@@ -138,6 +139,41 @@
         </form>
         <div id="password-result" class="result"></div>
       </div>
+
+      <div id="tab-remote-install" role="tabpanel" style="display:none">
+        <h2>Remote install credentials</h2>
+        <p class="hint" style="margin-top:0">
+          Configured once here, then reused for every remote install from
+          <a href="install.html">Install agent → Remote Install</a> — that tab only asks for a
+          target's IP and OS. The server logs into the target with these credentials and has it
+          pull its own install bundle from here, the same way a manual download would.
+        </p>
+
+        <form id="remote-install-settings-form">
+          <h2 style="font-size:0.85rem; margin-top:1.1rem">Linux (SSH)</h2>
+          <label>
+            SSH username
+            <input id="remote-linux-user-input" type="text" placeholder="ansible_svc">
+          </label>
+          <label>
+            SSH private key <span id="remote-linux-key-status" class="hint"></span>
+            <textarea id="remote-linux-key-input" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+          </label>
+
+          <h2 style="font-size:0.85rem; margin-top:1.1rem">Windows (WinRM)</h2>
+          <label>
+            WinRM username
+            <input id="remote-windows-user-input" type="text" placeholder="svc_provisioning">
+          </label>
+          <label>
+            WinRM password <span id="remote-windows-password-status" class="hint"></span>
+            <input id="remote-windows-password-input" type="password">
+          </label>
+
+          <button type="submit">Save remote install credentials</button>
+        </form>
+        <div id="remote-install-settings-result" class="result"></div>
+      </div>
     </div>
   </section>
 </main>
@@ -146,6 +182,6 @@
 
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=3"></script>
-<script src="settings.js?v=2"></script>
+<script src="settings.js?v=3"></script>
 </body>
 </html>

@@ -163,3 +163,44 @@ def test_list_runs_ordered_most_recent_first():
 
     runs = db.list_runs()
     assert [r["run_id"] for r in runs] == ["run-2", "run-1"]
+
+
+# ---- install tokens (POST /install/remote's auth handoff) -----------------
+
+
+def test_consume_install_token_returns_its_pinned_fields():
+    db.create_install_token("tok-1", "H1", "finance_analyst", "linux", "2026-01-01T00:00:00")
+    data = db.consume_install_token("tok-1")
+    assert data == {
+        "host_id": "H1",
+        "persona": "finance_analyst",
+        "os_name": "linux",
+        "created_at": "2026-01-01T00:00:00",
+    }
+
+
+def test_consume_install_token_is_single_use():
+    db.create_install_token("tok-1", "H1", "finance_analyst", "linux", "2026-01-01T00:00:00")
+    assert db.consume_install_token("tok-1") is not None
+    assert db.consume_install_token("tok-1") is None
+
+
+def test_consume_install_token_unknown_returns_none():
+    assert db.consume_install_token("never-issued") is None
+
+
+def test_remote_install_settings_round_trip():
+    db.update_settings(
+        {
+            "remote_linux_ssh_user": "ansible_svc",
+            "remote_linux_ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----",
+            "remote_windows_winrm_user": "svc_provisioning",
+            "remote_windows_winrm_password": "hunter2",
+        },
+        "2026-01-01T00:00:00",
+    )
+    settings = db.get_settings()
+    assert settings["remote_linux_ssh_user"] == "ansible_svc"
+    assert "fake" in settings["remote_linux_ssh_private_key"]
+    assert settings["remote_windows_winrm_user"] == "svc_provisioning"
+    assert settings["remote_windows_winrm_password"] == "hunter2"

@@ -165,10 +165,34 @@ working, which is also what a real user's session actually is -- not a
 background service. `./install.sh --uninstall` reverses the Linux
 install.
 
+**Remote install** -- a third tab on the same install page installs
+onto a host over the network, given just its IP and OS, instead of
+downloading and running an installer by hand on that host. Configure
+credentials once under Settings -> Remote Install (a default Linux SSH
+user + private key, and a default Windows WinRM user + password --
+masked at rest same as the LLM API keys), then every remote install
+after that only asks for IP/OS/Host ID/Persona.
+
+It doesn't push installer bytes over SSH/WinRM -- the ~50MB Windows
+installer alone makes that a bad idea over WinRM's SOAP transport.
+Instead `POST /install/remote` (`server/app.py`, admin only) mints a
+short-lived, single-use `install_token` (`db.create_install_token`),
+logs into the target with the stored credentials
+(`server/remote_install.py` -- `paramiko` for SSH, `pywinrm` for WinRM),
+and runs a one-line remote command that has the *target* pull its own
+bundle from `GET /install/agent-bundle?install_token=...` -- the exact
+same endpoint the manual download page uses, just authenticated
+differently: a valid `install_token` (consumed on first use, rejected
+after 10 minutes) stands in for the usual dashboard session, so the
+target host never needs a standing credential of its own. The token
+pins the host_id/persona/os it was minted for, ignoring anything
+different in the request's own query string, so it can't be redirected
+to install as a different host than an admin actually approved.
+
 ### Auth
 
-Two independent layers, both new (see `server/auth.py`'s module
-docstring for the full reasoning):
+Three independent layers (see `server/auth.py`'s module docstring for
+the reasoning behind the first two):
 
 - **Dashboard <-> browser**: per-user accounts with a role of `admin` or
   `viewer` (session cookie). Viewers can see everything (topology, runs,
@@ -194,6 +218,13 @@ docstring for the full reasoning):
   This is a smaller, faster-to-ship step than the mTLS this project's
   own TODOs originally called for -- see "Still stubbed" above for that
   tradeoff.
+- **Remote-install target <-> server**: a short-lived, single-use
+  `install_token` (10-minute expiry, see `db.INSTALL_TOKEN_TTL_SECONDS`),
+  minted by `POST /install/remote` and consumed by the one
+  `GET /install/agent-bundle` call it authorizes -- see "Agent
+  installation" above. Exists so a remote-install target never needs a
+  standing credential of its own; the admin's actual SSH/WinRM
+  credentials (Settings -> Remote Install) never leave the server.
 
 ### Live content generation & organization scenarios
 
@@ -311,8 +342,11 @@ scoring -- see each conftest.py for why). `server/tests` uses an
 isolated throwaway SQLite DB per test (never touches a real
 `cybersim.db`) and FastAPI's `TestClient` against the real API, so it
 covers real bugs found this way earlier: the dispatch-timing fix, the
-`os`/`persona`-clobbering bug, the concurrent-run guard, and the
-install-bundle input validation.
+`os`/`persona`-clobbering bug, the concurrent-run guard, the
+install-bundle input validation, and (in `remote_install.py`,
+non-mocked) `paramiko` dropping `DSSKey` in its 5.x line -- a real
+`AttributeError` on the actually-installed version that a fully-mocked
+test would never have caught.
 
 **What's covered vs. not**: `scenario_engine`, `db`, `app`'s API surface,
 and `scoring`'s matching/scoring logic are fully unit-tested. The agent
@@ -325,6 +359,13 @@ is *not* covered by this suite -- those were verified by hand (see each
 module's entry above) and would need a much heavier CI setup (a real
 LibreOffice install, a downloaded Chromium, a real or loopback SMB
 share) to automate. Worth doing eventually; out of scope for now.
+Similarly, `remote_install.py`'s actual SSH/WinRM connection and command
+execution are mocked in `test_remote_install.py` (real key parsing and
+error-wrapping are covered; a real network round-trip against an actual
+target host is not) -- verified by hand instead, against an
+intentionally-unreachable test IP, confirming both the connection-
+failure path and the real `paramiko` key-parsing path work end to end
+through the live API.
 
 ### CI / Releases
 

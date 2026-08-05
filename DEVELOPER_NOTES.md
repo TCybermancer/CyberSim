@@ -303,13 +303,26 @@ out in real execution time the way their `intended_start` implies --
   YAML-escaping and `--uninstall` logic were exercised with a mocked
   `systemctl` (no real systemd host available while building it) —
   worth a real run on an actual Linux box before relying on it.
+- Remote install (`server/remote_install.py`, `POST /install/remote`,
+  `GET /install/agent-bundle`'s `install_token` param, the dashboard's
+  Install agent → Remote Install tab): given a target's IP and OS,
+  logs in over SSH (`paramiko`, Linux) or WinRM (`pywinrm`, Windows)
+  using credentials configured once under Settings → Remote Install,
+  and runs a short remote command that has the *target* pull its own
+  bundle from this server rather than pushing installer bytes over
+  SSH/WinRM (the Windows installer alone is ~50MB -- bad fit for
+  WinRM's SOAP transport). See "Installation" below and that module's
+  docstring. Key-parsing and error-wrapping are unit-tested
+  (`server/tests/test_remote_install.py`); the real SSH/WinRM network
+  round-trip is not (see "Testing" below) -- verified by hand instead
+  against an intentionally-unreachable IP.
 - Automated tests (`server/tests/`, `scoring/tests/`, `agent/tests/`,
   70 tests) and CI (`.github/workflows/`) — see "Testing" and "CI /
   Releases" below for scope (full coverage for `server`/`scoring`; agent
   action modules covered for OS-portable logic only, real
   browser/Office/SMB driving stays hand-verified).
 
-**Six bugs fixed along the way, worth knowing about if you're touching
+**Nine bugs fixed along the way, worth knowing about if you're touching
 these files:**
 - `ActionSpec`/`IntentRecord`/`CompletionRecord` all carry `datetime`
   fields. Calling Pydantic's (deprecated) `.dict()` on them before
@@ -385,6 +398,23 @@ these files:**
   (any host with an action_spec that has no completion_record yet,
   dispatched or not) and returns 409 listing which hosts are still mid-run
   instead of silently double-booking them.
+- `remote_install.py`'s SSH key loader hardcoded
+  `[paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey,
+  paramiko.DSSKey]` -- paramiko 5.x dropped `DSSKey` entirely (DSA keys
+  are deprecated/disabled-by-default in OpenSSH anyway), so with that
+  version actually installed, *every* remote install attempt raised a
+  raw `AttributeError` before ever reaching the connection attempt --
+  caught manually in the browser, not by the test suite, since
+  `test_app.py`'s remote-install tests mock `install_linux`/
+  `install_windows` entirely and never exercised the real key-parsing
+  code. Fixed by looking classes up via `getattr(paramiko, name, None)`
+  and filtering out whichever don't exist on the installed version,
+  plus a dedicated `test_remote_install.py` that calls the real
+  paramiko key-parsing path (unlike test_app.py's mocked version) --
+  including a regression test that simulates a paramiko version missing
+  an attribute this module references, so the same class of bug against
+  a *future* paramiko release would fail loudly in CI instead of only
+  in someone's browser.
 
 **Still stubbed / not yet built:**
 1. Agent auth is a shared-bearer-token scheme (one token per host,

@@ -21,8 +21,8 @@ async function api(path, opts) {
 // ---- tabs -------------------------------------------------------------
 
 function selectTab(name) {
-  const tabs = { general: "tab-general", security: "tab-security" };
-  const buttons = { general: "tab-btn-general", security: "tab-btn-security" };
+  const tabs = { general: "tab-general", security: "tab-security", "remote-install": "tab-remote-install" };
+  const buttons = { general: "tab-btn-general", security: "tab-btn-security", "remote-install": "tab-btn-remote-install" };
   for (const key of Object.keys(tabs)) {
     const active = key === name;
     document.getElementById(tabs[key]).style.display = active ? "" : "none";
@@ -34,6 +34,7 @@ function selectTab(name) {
 
 document.getElementById("tab-btn-general").addEventListener("click", () => selectTab("general"));
 document.getElementById("tab-btn-security").addEventListener("click", () => selectTab("security"));
+document.getElementById("tab-btn-remote-install").addEventListener("click", () => selectTab("remote-install"));
 
 // ---- change password (any logged-in role) ------------------------------
 
@@ -89,6 +90,11 @@ function applySettings(s) {
   document.getElementById("local-key-status").textContent = s.local_key_set ? "(configured — leave blank to keep it)" : "(not set)";
   document.getElementById("local-url-input").value = s.local_base_url || "";
   document.getElementById("local-model-input").value = s.local_model || "";
+
+  document.getElementById("remote-linux-user-input").value = s.remote_linux_ssh_user || "";
+  document.getElementById("remote-linux-key-status").textContent = s.remote_linux_ssh_key_set ? "(configured — leave blank to keep it)" : "(not set)";
+  document.getElementById("remote-windows-user-input").value = s.remote_windows_winrm_user || "";
+  document.getElementById("remote-windows-password-status").textContent = s.remote_windows_winrm_password_set ? "(configured — leave blank to keep it)" : "(not set)";
 }
 
 document.getElementById("connected-toggle").addEventListener("change", (e) => {
@@ -144,16 +150,52 @@ document.getElementById("settings-form").addEventListener("submit", async (e) =>
   }
 });
 
+document.getElementById("remote-install-settings-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const result = document.getElementById("remote-install-settings-result");
+  const submitBtn = e.target.querySelector("button[type=submit]");
+
+  const payload = {
+    remote_linux_ssh_user: document.getElementById("remote-linux-user-input").value,
+    remote_windows_winrm_user: document.getElementById("remote-windows-user-input").value,
+  };
+  // Same "blank means leave it alone" convention as the LLM API keys above.
+  const sshKey = document.getElementById("remote-linux-key-input").value;
+  if (sshKey) payload.remote_linux_ssh_private_key = sshKey;
+  const winrmPassword = document.getElementById("remote-windows-password-input").value;
+  if (winrmPassword) payload.remote_windows_winrm_password = winrmPassword;
+
+  submitBtn.disabled = true;
+  try {
+    const updated = await api("/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    applySettings(updated);
+    document.getElementById("remote-linux-key-input").value = "";
+    document.getElementById("remote-windows-password-input").value = "";
+    result.textContent = "remote install credentials saved";
+    result.className = "result success";
+  } catch (err) {
+    result.textContent = `couldn't save remote install credentials: ${err.message}`;
+    result.className = "result error";
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 (async function init() {
   const user = await setupWhoami();
   if (!user) return;
   if (user.role !== "admin") {
     document.getElementById("settings-card").style.display = "none";
     document.getElementById("viewer-blocked-card").style.display = "";
-    // Non-admins can't touch General at all -- land them on the one tab
-    // that's actually theirs (changing their own password) instead of a
-    // dead end.
+    // Non-admins can't touch General or Remote Install at all -- land
+    // them on the one tab that's actually theirs (changing their own
+    // password) instead of a dead end.
     document.getElementById("tab-btn-general").style.display = "none";
+    document.getElementById("tab-btn-remote-install").style.display = "none";
     selectTab("security");
     return;
   }

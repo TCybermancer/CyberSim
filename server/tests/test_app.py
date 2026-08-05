@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import app as app_module
 import content_gen
 import db
+import remote_install
 from conftest import TEST_ADMIN_PASSWORD
 
 
@@ -588,6 +589,193 @@ def test_settings_rejects_unknown_network_mode(client):
 def test_settings_rejects_unknown_provider(client):
     resp = client.put("/settings", json={"llm_provider": "carrier-pigeon"})
     assert resp.status_code == 422
+
+
+def test_default_settings_have_no_remote_install_credentials(client):
+    resp = client.get("/settings")
+    body = resp.json()
+    assert body["remote_linux_ssh_user"] is None
+    assert body["remote_linux_ssh_key_set"] is False
+    assert body["remote_windows_winrm_user"] is None
+    assert body["remote_windows_winrm_password_set"] is False
+
+
+def test_remote_install_settings_update_never_echoes_secrets(client):
+    resp = client.put(
+        "/settings",
+        json={
+            "remote_linux_ssh_user": "ansible_svc",
+            "remote_linux_ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nsuper-secret\n-----END OPENSSH PRIVATE KEY-----",
+            "remote_windows_winrm_user": "svc_provisioning",
+            "remote_windows_winrm_password": "hunter2",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "remote_linux_ssh_private_key" not in body
+    assert "remote_windows_winrm_password" not in body
+    assert "super-secret" not in resp.text
+    assert "hunter2" not in resp.text
+    assert body["remote_linux_ssh_user"] == "ansible_svc"  # not a secret, echoed back
+    assert body["remote_linux_ssh_key_set"] is True
+    assert body["remote_windows_winrm_user"] == "svc_provisioning"
+    assert body["remote_windows_winrm_password_set"] is True
+
+
+# ---- remote install ---------------------------------------------------
+
+
+def _configure_remote_install_settings(client):
+    client.put(
+        "/settings",
+        json={
+            "remote_linux_ssh_user": "ansible_svc",
+            "remote_linux_ssh_private_key": "fake-key-material",
+            "remote_windows_winrm_user": "svc_provisioning",
+            "remote_windows_winrm_password": "hunter2",
+        },
+    )
+
+
+def test_remote_install_requires_admin(viewer_client, anon_client):
+    payload = {"ip": "10.99.0.50", "os": "linux", "host_id": "H1"}
+    assert viewer_client.post("/install/remote", json=payload).status_code == 403
+    assert anon_client.post("/install/remote", json=payload).status_code == 401
+
+
+def test_remote_install_400s_when_linux_credentials_missing(client):
+    resp = client.post("/install/remote", json={"ip": "10.99.0.50", "os": "linux", "host_id": "H1"})
+    assert resp.status_code == 400
+
+
+def test_remote_install_400s_when_windows_credentials_missing(client):
+    resp = client.post("/install/remote", json={"ip": "10.99.0.50", "os": "windows", "host_id": "H1"})
+    assert resp.status_code == 400
+
+
+def test_remote_install_rejects_unknown_os(client):
+    resp = client.post("/install/remote", json={"ip": "10.99.0.50", "os": "macos", "host_id": "H1"})
+    assert resp.status_code == 422
+
+
+@patch("remote_install.install_linux")
+def test_remote_install_linux_success(mock_install, client):
+    _configure_remote_install_settings(client)
+    mock_install.return_value = {"exit_code": 0, "stdout": "installed", "stderr": ""}
+
+    resp = client.post(
+        "/install/remote",
+        json={"ip": "10.99.0.50", "os": "linux", "host_id": "H1", "persona": "finance_analyst"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["stdout"] == "installed"
+
+    # credentials came from Settings, not the request body
+    call_ip, call_user, call_key, call_url = mock_install.call_args[0]
+    assert call_ip == "10.99.0.50"
+    assert call_user == "ansible_svc"
+    assert call_key == "fake-key-material"
+    assert "install_token=" in call_url
+    assert "host_id=H1" in call_url
+
+
+@patch("remote_install.install_linux")
+def test_remote_install_reports_failed_status_on_nonzero_exit(mock_install, client):
+    _configure_remote_install_settings(client)
+    mock_install.return_value = {"exit_code": 1, "stdout": "", "stderr": "install.sh: command not found"}
+
+    resp = client.post("/install/remote", json={"ip": "10.99.0.50", "os": "linux", "host_id": "H1"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "failed"
+
+
+@patch("remote_install.install_linux")
+def test_remote_install_connection_failure_becomes_502(mock_install, client):
+    _configure_remote_install_settings(client)
+    mock_install.side_effect = remote_install.RemoteInstallError("couldn't SSH to 10.99.0.50: timed out")
+
+    resp = client.post("/install/remote", json={"ip": "10.99.0.50", "os": "linux", "host_id": "H1"})
+    assert resp.status_code == 502
+
+
+@patch("remote_install.install_windows")
+def test_remote_install_windows_success(mock_install, client):
+    _configure_remote_install_settings(client)
+    mock_install.return_value = {"exit_code": 0, "stdout": "installed", "stderr": ""}
+
+    resp = client.post("/install/remote", json={"ip": "10.99.0.60", "os": "windows", "host_id": "H2"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+    call_ip, call_user, call_password, _call_url = mock_install.call_args[0]
+    assert call_ip == "10.99.0.60"
+    assert call_user == "svc_provisioning"
+    assert call_password == "hunter2"
+
+
+# ---- install-token bundle download (remote install's auth handoff) --------
+
+
+def test_install_bundle_with_valid_install_token_needs_no_session(anon_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_INSTALLER_NAME).write_bytes(b"fake installer bytes")
+    db.create_install_token("tok-1", "H1", "finance_analyst", "windows", datetime.utcnow().isoformat())
+
+    resp = anon_client.get("/install/agent-bundle", params={"install_token": "tok-1"})
+    assert resp.status_code == 200
+
+
+def test_install_bundle_install_token_pins_its_own_fields(anon_client, tmp_path, monkeypatch):
+    """A query string's own host_id/persona/os are ignored once a valid
+    install_token is present -- the token's own pinned values win, so a
+    token minted for one host can't be redirected to another by editing
+    the URL."""
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_LINUX_BINARY_NAME).write_bytes(b"fake binary")
+    (tmp_path / app_module.AGENT_LINUX_INSTALL_SCRIPT_NAME).write_text("#!/bin/sh\n")
+    db.create_install_token("tok-1", "REAL-HOST", "finance_analyst", "linux", datetime.utcnow().isoformat())
+
+    resp = anon_client.get(
+        "/install/agent-bundle",
+        params={"install_token": "tok-1", "host_id": "SPOOFED-HOST", "os": "windows"},
+    )
+    assert resp.status_code == 200
+    # os=windows in the query string was ignored -- linux (the token's own
+    # pinned value) is what actually got served.
+    assert resp.headers["content-type"] == "application/gzip"
+
+    tf = tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz")
+    lines = tf.extractfile("install-defaults.txt").read().decode().splitlines()
+    assert lines[1] == "REAL-HOST"
+
+
+def test_install_bundle_install_token_is_single_use(anon_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_INSTALLER_NAME).write_bytes(b"fake installer bytes")
+    db.create_install_token("tok-1", "H1", "default", "windows", datetime.utcnow().isoformat())
+
+    first = anon_client.get("/install/agent-bundle", params={"install_token": "tok-1"})
+    second = anon_client.get("/install/agent-bundle", params={"install_token": "tok-1"})
+    assert first.status_code == 200
+    assert second.status_code == 401
+
+
+def test_install_bundle_install_token_expired_rejected(anon_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "INSTALL_ARTIFACTS_DIR", tmp_path)
+    (tmp_path / app_module.AGENT_INSTALLER_NAME).write_bytes(b"fake installer bytes")
+    monkeypatch.setattr(db, "INSTALL_TOKEN_TTL_SECONDS", 0)
+    stale = (datetime.utcnow() - timedelta(seconds=5)).isoformat()
+    db.create_install_token("tok-1", "H1", "default", "windows", stale)
+
+    resp = anon_client.get("/install/agent-bundle", params={"install_token": "tok-1"})
+    assert resp.status_code == 401
+
+
+def test_install_bundle_bogus_token_and_no_session_401s(anon_client):
+    resp = anon_client.get("/install/agent-bundle", params={"install_token": "never-issued"})
+    assert resp.status_code == 401
 
 
 # ---- live content generation ------------------------------------------

@@ -4,3 +4,5 @@ pydantic>=2.6
 pyyaml>=6.0
 python-multipart>=0.0.9
 requests>=2.31
+paramiko>=3.4      # SSH client for POST /install/remote's Linux targets (remote_install.py)
+pywinrm>=0.4        # WinRM client for POST /install/remote's Windows targets (remote_install.py)

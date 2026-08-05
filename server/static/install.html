@@ -10,7 +10,7 @@
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=13">
+<link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
 <div class="app-shell">
@@ -43,6 +43,7 @@
       <div class="tab-bar" role="tablist">
         <button type="button" id="tab-btn-windows" class="tab-button active" role="tab" aria-selected="true">Windows</button>
         <button type="button" id="tab-btn-linux" class="tab-button" role="tab" aria-selected="false">Linux</button>
+        <button type="button" id="tab-btn-remote-install" class="tab-button" role="tab" aria-selected="false">Remote Install</button>
       </div>
 
       <div id="tab-windows" role="tabpanel">
@@ -120,6 +121,42 @@
           with no prompts. <code>./install.sh --uninstall</code> reverses everything.
         </p>
       </div>
+
+      <div id="tab-remote-install" role="tabpanel" style="display:none">
+        <h2>Remote install</h2>
+        <p class="hint" style="margin-top:0">
+          Installs the agent on a host over the network, without logging into it yourself. Needs
+          credentials configured once under
+          <a href="settings.html">Settings → Remote Install</a> — this server logs into the
+          target with those and has it pull its own install bundle from here, the same way a
+          manual download would.
+        </p>
+
+        <form id="remote-install-form">
+          <label>
+            Target IP <span class="hint">(must be reachable from this server on the OOB network)</span>
+            <input id="remote-ip-input" type="text" placeholder="10.99.0.42" required>
+          </label>
+          <label>
+            OS
+            <select id="remote-os-select">
+              <option value="linux">Linux</option>
+              <option value="windows">Windows</option>
+            </select>
+          </label>
+          <label>
+            Host ID <span class="hint">(must match a scenario's "hosts" list on the server)</span>
+            <input id="remote-host-id-input" class="host-id-input" type="text" placeholder="FIN-WKS03" required>
+          </label>
+          <label>
+            Persona
+            <input id="remote-persona-input" type="text" placeholder="finance_analyst" value="default">
+          </label>
+          <button type="submit" id="remote-install-submit-btn">Start remote install</button>
+        </form>
+        <div id="remote-install-result" class="result"></div>
+        <pre id="remote-install-output" class="preview" style="white-space:pre-wrap; display:none"></pre>
+      </div>
     </div>
 
     <div class="card">
@@ -136,6 +173,6 @@ sudo ./install.sh              # server/install.sh, installs as a systemd servic
 
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=3"></script>
-<script src="install.js?v=4"></script>
+<script src="install.js?v=5"></script>
 </body>
 </html>

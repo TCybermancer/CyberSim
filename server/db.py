@@ -75,6 +75,21 @@ CREATE TABLE IF NOT EXISTS agent_tokens (
     issued_at TEXT NOT NULL
 );
 
+-- Short-lived, single-use tokens minted by POST /install/remote so a
+-- target host's own curl/Invoke-WebRequest call can authenticate to
+-- GET /install/agent-bundle without ever holding a dashboard session
+-- cookie or any standing credential -- see app.py's require_dashboard_
+-- session middleware and download_agent_bundle for how this is
+-- consumed (deleted on first use, or rejected once past
+-- INSTALL_TOKEN_TTL_SECONDS in app.py).
+CREATE TABLE IF NOT EXISTS install_tokens (
+    token TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    persona TEXT NOT NULL,
+    os_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- Dashboard accounts. role is enforced in Python (see auth.py/app.py),
 -- not just this CHECK constraint, since SQLite CHECK errors surface as
 -- a raw IntegrityError rather than a clean 422 -- the constraint is a
@@ -105,6 +120,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- env-var override (CYBERSIM_<PROVIDER>_API_KEY) takes precedence over
 -- whatever's stored here, matching CYBERSIM_ADMIN_PASSWORD's pattern,
 -- so a real deployment doesn't have to keep a live key in the DB.
+-- remote_* columns: credentials for POST /install/remote (Settings ->
+-- Remote Install tab), configured once and reused for every remote
+-- install rather than typed per-request. Same plaintext-at-rest
+-- disclaimer as the LLM API keys above. SSH (Linux) is key-based to
+-- match provisioning/inventory.ini.example's existing convention;
+-- WinRM (Windows) is password-based since NTLM-transport WinRM doesn't
+-- do public-key auth.
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_mode TEXT NOT NULL DEFAULT 'airgapped' CHECK (network_mode IN ('airgapped', 'connected')),
@@ -116,6 +138,10 @@ CREATE TABLE IF NOT EXISTS settings (
     local_base_url TEXT,
     local_api_key TEXT,
     local_model TEXT,
+    remote_linux_ssh_user TEXT,
+    remote_linux_ssh_private_key TEXT,
+    remote_windows_winrm_user TEXT,
+    remote_windows_winrm_password TEXT,
     updated_at TEXT NOT NULL
 );
 """
@@ -434,6 +460,10 @@ _DEFAULT_SETTINGS = {
     "local_base_url": None,
     "local_api_key": None,
     "local_model": None,
+    "remote_linux_ssh_user": None,
+    "remote_linux_ssh_private_key": None,
+    "remote_windows_winrm_user": None,
+    "remote_windows_winrm_password": None,
 }
 
 
@@ -461,14 +491,21 @@ def update_settings(updates: dict, updated_at: str) -> dict:
             """
             INSERT INTO settings
                 (id, network_mode, llm_provider, anthropic_api_key, anthropic_model,
-                 openai_api_key, openai_model, local_base_url, local_api_key, local_model, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 openai_api_key, openai_model, local_base_url, local_api_key, local_model,
+                 remote_linux_ssh_user, remote_linux_ssh_private_key,
+                 remote_windows_winrm_user, remote_windows_winrm_password, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 network_mode=excluded.network_mode, llm_provider=excluded.llm_provider,
                 anthropic_api_key=excluded.anthropic_api_key, anthropic_model=excluded.anthropic_model,
                 openai_api_key=excluded.openai_api_key, openai_model=excluded.openai_model,
                 local_base_url=excluded.local_base_url, local_api_key=excluded.local_api_key,
-                local_model=excluded.local_model, updated_at=excluded.updated_at
+                local_model=excluded.local_model,
+                remote_linux_ssh_user=excluded.remote_linux_ssh_user,
+                remote_linux_ssh_private_key=excluded.remote_linux_ssh_private_key,
+                remote_windows_winrm_user=excluded.remote_windows_winrm_user,
+                remote_windows_winrm_password=excluded.remote_windows_winrm_password,
+                updated_at=excluded.updated_at
             """,
             (
                 merged["network_mode"],
@@ -480,10 +517,42 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                 merged["local_base_url"],
                 merged["local_api_key"],
                 merged["local_model"],
+                merged["remote_linux_ssh_user"],
+                merged["remote_linux_ssh_private_key"],
+                merged["remote_windows_winrm_user"],
+                merged["remote_windows_winrm_password"],
                 updated_at,
             ),
         )
     return get_settings()
+
+
+# ---- install tokens -------------------------------------------------------
+
+INSTALL_TOKEN_TTL_SECONDS = 600  # 10 minutes -- see app.py's remote-install flow
+
+
+def create_install_token(token: str, host_id: str, persona: str, os_name: str, created_at: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO install_tokens (token, host_id, persona, os_name, created_at) VALUES (?, ?, ?, ?, ?)",
+            (token, host_id, persona, os_name, created_at),
+        )
+
+
+def consume_install_token(token: str) -> dict | None:
+    """Fetch-and-delete: a token is valid for exactly one call, whether or
+    not that call's own age check (see app.py) ends up rejecting it --
+    once looked up here, it's gone either way. Returns None if the token
+    was never issued or has already been consumed."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT host_id, persona, os_name, created_at FROM install_tokens WHERE token = ?", (token,)
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM install_tokens WHERE token = ?", (token,))
+        return dict(row)
 
 
 def get_ledger_for_run(run_id: str) -> dict:

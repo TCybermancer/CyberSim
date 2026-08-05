@@ -30,7 +30,13 @@ Agents on the in-band range network reach this API only via their OOB NIC
                                 file pre-filling its wizard/prompts with *this*
                                 server's own address (see install_artifacts/ and
                                 agent/installer/) -- also mints/reuses that host's
-                                bearer token (see auth.py)
+                                bearer token (see auth.py). Normally admin-session
+                                gated; also accepts a single-use ?install_token
+                                (see POST /install/remote) with no session needed.
+  POST /install/remote         given a target's IP + OS, SSH/WinRM's in (credentials
+                                from Settings -> Remote Install) and triggers that
+                                target to pull+run its own install bundle from the
+                                above endpoint (admin only; see remote_install.py)
   POST /auth/login             dashboard login (sets a session cookie); see auth.py
   POST /auth/logout            clears the session cookie
   GET  /auth/me                who's logged in and their role (for the UI to hide/disable
@@ -40,9 +46,10 @@ Agents on the in-band range network reach this API only via their OOB NIC
   POST /users                  create a dashboard account (admin only)
   GET  /users                  list dashboard accounts (admin only)
   DELETE /users/{username}     remove a dashboard account (admin only)
-  GET  /settings                network posture + LLM provider config (admin only, API
-                                keys masked; see content_gen.py)
-  PUT  /settings                update network posture / LLM provider config (admin only)
+  GET  /settings                network posture + LLM provider config + remote-install
+                                credentials (admin only, secrets masked; see content_gen.py
+                                and remote_install.py)
+  PUT  /settings                update any of the above (admin only)
 
 Auth has two independent layers (see auth.py's module docstring for the
 tradeoffs each one made):
@@ -81,6 +88,7 @@ from pydantic import BaseModel, Field
 import auth
 import content_gen
 import db
+import remote_install
 import scoring_core
 from models import ActionSpec, ActionType, AgentRegistration, CompletionRecord, IntentRecord, PollResponse
 from scenario_engine import load_scenario, resolve
@@ -156,6 +164,7 @@ async def startup():
 # accounts should reach every one of these paths but not mutate anything.
 _PUBLIC_PATHS = {"/health", "/auth/login", "/"}
 _AGENT_TOKEN_PATHS = {"/agents/register", "/ledger/intent", "/ledger/completion"}
+_INSTALL_BUNDLE_PATH = "/install/agent-bundle"
 
 
 def _is_agent_poll_path(path: str) -> bool:
@@ -174,6 +183,14 @@ async def require_dashboard_session(request: Request, call_next):
         or path in _PUBLIC_PATHS
         or path in _AGENT_TOKEN_PATHS
         or _is_agent_poll_path(path)
+        # A remote-install target's own curl/Invoke-WebRequest call has
+        # no dashboard session cookie -- let it through here and defer
+        # to download_agent_bundle() itself to validate the install_token
+        # query param (single-use, short-lived; minted by POST
+        # /install/remote). Presence alone is enough to pass the
+        # middleware; an invalid/expired/missing-when-required token
+        # still gets rejected by the route handler.
+        or (path == _INSTALL_BUNDLE_PATH and request.query_params.get("install_token"))
     ):
         return await call_next(request)
 
@@ -302,9 +319,10 @@ def remove_user(username: str, request: Request):
 
 
 def _mask_settings(s: dict) -> dict:
-    """Never echoes a stored API key back to the browser -- only whether
-    one is set, so the settings page can show "configured" vs. a blank
-    field without a full round-trip ever exposing the secret again."""
+    """Never echoes a stored API key/credential back to the browser --
+    only whether one is set, so the settings page can show "configured"
+    vs. a blank field without a full round-trip ever exposing the secret
+    again."""
     return {
         "network_mode": s["network_mode"],
         "llm_provider": s["llm_provider"],
@@ -315,6 +333,13 @@ def _mask_settings(s: dict) -> dict:
         "local_base_url": s.get("local_base_url"),
         "local_model": s.get("local_model"),
         "local_key_set": bool(s.get("local_api_key")),
+        # Usernames aren't secrets -- echoed back so the settings form can
+        # show what's configured. Private key / password are masked like
+        # the LLM API keys above.
+        "remote_linux_ssh_user": s.get("remote_linux_ssh_user"),
+        "remote_linux_ssh_key_set": bool(s.get("remote_linux_ssh_private_key")),
+        "remote_windows_winrm_user": s.get("remote_windows_winrm_user"),
+        "remote_windows_winrm_password_set": bool(s.get("remote_windows_winrm_password")),
         "updated_at": s.get("updated_at"),
     }
 
@@ -338,6 +363,10 @@ class SettingsUpdateRequest(BaseModel):
     local_base_url: str | None = None
     local_api_key: str | None = None
     local_model: str | None = None
+    remote_linux_ssh_user: str | None = None
+    remote_linux_ssh_private_key: str | None = None
+    remote_windows_winrm_user: str | None = None
+    remote_windows_winrm_password: str | None = None
 
 
 @app.put("/settings", dependencies=[Depends(require_admin)])
@@ -846,12 +875,13 @@ def _force_executable(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
     return tarinfo
 
 
-@app.get("/install/agent-bundle", dependencies=[Depends(require_admin)])
+@app.get("/install/agent-bundle")
 def download_agent_bundle(
     request: Request,
     host_id: str = Query(default="", pattern=_SAFE_TOKEN),
     persona: str = Query(default="default", pattern=_SAFE_TOKEN),
     os_name: str = Query(default="windows", alias="os", pattern=r"^(windows|linux)$"),
+    install_token: str | None = Query(default=None),
 ):
     """Zips (Windows) or tars (Linux) the pre-built agent installer with a
     per-request sidecar file -- server_url taken from *this request's
@@ -871,11 +901,24 @@ def download_agent_bundle(
     (same 4-line format, just consumed by a shell prompt loop instead of
     an Inno Setup wizard page).
 
-    Gated behind a dashboard session (see require_dashboard_session
-    middleware) since this is what actually issues live agent
-    credentials now -- only a logged-in operator should be able to mint
-    one. host_id/persona are still restricted to a safe charset (rather
-    than just escaped) as defense in depth, since both flow into another
+    Two ways in, checked in this order:
+    1. install_token -- a short-lived, single-use token minted by POST
+       /install/remote (see remote_install.py), consumed here via
+       db.consume_install_token(). Lets a *remote target host's own*
+       curl/Invoke-WebRequest call authenticate without ever holding a
+       dashboard session or any standing credential. The token pins its
+       own host_id/persona/os_name from when it was minted -- any
+       differing values in this request's own query string are ignored,
+       so a token can't be repurposed for a different host/persona than
+       an admin actually approved. Rejected (401) if missing, unknown,
+       already used, or older than db.INSTALL_TOKEN_TTL_SECONDS.
+    2. Otherwise, a dashboard session belonging to an admin (see
+       require_dashboard_session middleware) -- the normal
+       manual-download-from-the-install-page path, unchanged from
+       before install_token existed.
+
+    host_id/persona are still restricted to a safe charset (rather than
+    just escaped) as defense in depth, since both flow into another
     process's string-concatenated YAML (the Windows installer's Pascal
     script; install-linux.sh's own shell variables). A value with an
     embedded quote/newline could otherwise inject arbitrary config.yaml
@@ -890,6 +933,19 @@ def download_agent_bundle(
     Release CI embeds them in the published server image; source
     deployments must build/copy them here separately. See docs/README.md.
     """
+    if install_token:
+        token_data = db.consume_install_token(install_token)
+        if not token_data:
+            raise HTTPException(401, "install token is invalid or already used")
+        age_seconds = (datetime.utcnow() - datetime.fromisoformat(token_data["created_at"])).total_seconds()
+        if age_seconds > db.INSTALL_TOKEN_TTL_SECONDS:
+            raise HTTPException(401, "install token has expired")
+        host_id, persona, os_name = token_data["host_id"], token_data["persona"], token_data["os_name"]
+    else:
+        user = getattr(request.state, "user", None)
+        if not user or user["role"] != "admin":
+            raise HTTPException(403, "admin role required")
+
     server_url = str(request.base_url).rstrip("/")
     token = ""
     if host_id:
@@ -945,6 +1001,82 @@ def download_agent_bundle(
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="cybersim-agent-installer.zip"'},
     )
+
+
+class RemoteInstallRequest(BaseModel):
+    ip: str = Field(min_length=1, max_length=255)
+    os: str = Field(pattern=r"^(windows|linux)$")
+    host_id: str = Field(pattern=_SAFE_TOKEN)
+    persona: str = Field(default="default", pattern=_SAFE_TOKEN)
+
+
+@app.post("/install/remote", dependencies=[Depends(require_admin)])
+async def remote_install_route(req: RemoteInstallRequest, request: Request):
+    """The dashboard's Settings -> Remote Install tab's counterpart:
+    given a target's IP and OS, logs into it (credentials configured
+    once in Settings -> Remote Install, not typed per-request -- see
+    db.py's settings columns) and triggers the same install flow a human
+    would run by hand from /ui/install.html.
+
+    Doesn't push installer bytes over SSH/WinRM itself -- mints a
+    short-lived, single-use install_token (db.create_install_token) and
+    has the *target* pull its own bundle from this server via a plain
+    curl/Invoke-WebRequest, exactly like a manual install would, just
+    triggered remotely. See remote_install.py's module docstring for why
+    (mainly: the Windows installer alone is ~50MB, and WinRM's SOAP
+    transport handles that badly).
+
+    remote_install.RemoteInstallError (connection/auth failure reaching
+    the target) becomes a 502; a target reached but whose install
+    command itself failed (bad curl, tar, or installer exit code) is
+    still a 200 with status="failed" and the captured stdout/stderr --
+    that's a fact about the target host, not this request.
+    """
+    settings = db.get_settings()
+    token = auth.new_token()
+    db.create_install_token(token, req.host_id, req.persona, req.os, datetime.utcnow().isoformat())
+    server_url = str(request.base_url).rstrip("/")
+    download_url = (
+        f"{server_url}/install/agent-bundle?os={req.os}&host_id={req.host_id}"
+        f"&persona={req.persona}&install_token={token}"
+    )
+
+    if req.os == "linux":
+        if not settings.get("remote_linux_ssh_user") or not settings.get("remote_linux_ssh_private_key"):
+            raise HTTPException(
+                400,
+                "Linux remote-install credentials aren't configured -- set them under "
+                "Settings -> Remote Install.",
+            )
+        try:
+            result = await asyncio.to_thread(
+                remote_install.install_linux,
+                req.ip,
+                settings["remote_linux_ssh_user"],
+                settings["remote_linux_ssh_private_key"],
+                download_url,
+            )
+        except remote_install.RemoteInstallError as e:
+            raise HTTPException(502, str(e))
+    else:
+        if not settings.get("remote_windows_winrm_user") or not settings.get("remote_windows_winrm_password"):
+            raise HTTPException(
+                400,
+                "Windows remote-install credentials aren't configured -- set them under "
+                "Settings -> Remote Install.",
+            )
+        try:
+            result = await asyncio.to_thread(
+                remote_install.install_windows,
+                req.ip,
+                settings["remote_windows_winrm_user"],
+                settings["remote_windows_winrm_password"],
+                download_url,
+            )
+        except remote_install.RemoteInstallError as e:
+            raise HTTPException(502, str(e))
+
+    return {"status": "ok" if result["exit_code"] == 0 else "failed", **result}
 
 
 @app.get("/")
