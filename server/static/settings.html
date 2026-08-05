@@ -159,6 +159,10 @@
             SSH private key <span id="remote-linux-key-status" class="hint"></span>
             <textarea id="remote-linux-key-input" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
           </label>
+          <label>
+            SSH password <span class="hint">(fallback if no key is set above)</span> <span id="remote-linux-password-status" class="hint"></span>
+            <input id="remote-linux-password-input" type="password">
+          </label>
 
           <h2 style="font-size:0.85rem; margin-top:1.1rem">Windows (WinRM)</h2>
           <label>
@@ -169,6 +173,19 @@
             WinRM password <span id="remote-windows-password-status" class="hint"></span>
             <input id="remote-windows-password-input" type="password">
           </label>
+
+          <h2 style="font-size:0.85rem; margin-top:1.1rem">Server address</h2>
+          <label>
+            Address targets should use to reach this server
+            <span class="hint">(optional — overrides auto-detection)</span>
+            <input id="remote-server-url-input" type="text" placeholder="http://192.168.158.1:8000">
+          </label>
+          <p class="hint" style="margin-top:0">
+            Leave blank and the target is told to use whatever address your own browser reached
+            this dashboard on — only correct if that happens to also be reachable from the
+            target. Set this explicitly (this server's OOB-network address) if remote installs
+            fail to download on the target even though the SSH/WinRM connection itself succeeds.
+          </p>
 
           <button type="submit">Save remote install credentials</button>
         </form>
@@ -182,6 +199,6 @@
 
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=3"></script>
-<script src="settings.js?v=3"></script>
+<script src="settings.js?v=5"></script>
 </body>
 </html>

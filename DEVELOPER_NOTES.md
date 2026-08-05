@@ -298,11 +298,13 @@ out in real execution time the way their `intended_start` implies --
   user install, `systemd --user` unit instead of a Scheduled Task) and
   `GET /install/agent-bundle` (the auto-linking download page at
   `/ui/install.html`, now with a tab per OS). See "Installation" below —
-  the server/Docker/native-service paths and the Windows agent installer
-  are all verified by hand end to end; the Linux installer's config.yaml/
-  YAML-escaping and `--uninstall` logic were exercised with a mocked
-  `systemctl` (no real systemd host available while building it) —
-  worth a real run on an actual Linux box before relying on it.
+  the server/Docker/native-service paths, the Windows agent installer,
+  and the Linux installer are all verified by hand end to end now,
+  including install-linux.sh's config.yaml/YAML-escaping/`--uninstall`
+  logic against a real systemd host (initially only exercised with a
+  mocked `systemctl`, since no real systemd host was available while
+  building it -- see the Remote Install bullet below for how that gap
+  got closed).
 - Remote install (`server/remote_install.py`, `POST /install/remote`,
   `GET /install/agent-bundle`'s `install_token` param, the dashboard's
   Install agent → Remote Install tab): given a target's IP and OS,
@@ -312,17 +314,25 @@ out in real execution time the way their `intended_start` implies --
   bundle from this server rather than pushing installer bytes over
   SSH/WinRM (the Windows installer alone is ~50MB -- bad fit for
   WinRM's SOAP transport). See "Installation" below and that module's
-  docstring. Key-parsing and error-wrapping are unit-tested
-  (`server/tests/test_remote_install.py`); the real SSH/WinRM network
-  round-trip is not (see "Testing" below) -- verified by hand instead
-  against an intentionally-unreachable IP.
+  docstring. Key-parsing, password-auth fallback, WinRM's HTTPS-then-
+  HTTP fallback, and error-wrapping are all unit-tested
+  (`server/tests/test_remote_install.py`); a real SSH/WinRM round-trip
+  against an actual target isn't, by nature of what a unit test can
+  reach -- verified by hand instead against two real, separate machines
+  (a SIFT Workstation and a Windows 10 box on a private VMware network),
+  with a full install actually completing and confirmed on each (real
+  systemd unit `active (running)`; real Scheduled Task registered "At
+  logon time"), then uninstalled again. See "Testing" below for the
+  three real bugs that surfaced only by testing against real, separate
+  targets -- none of them were reachable by mocking the SSH/WinRM
+  layer, however thoroughly.
 - Automated tests (`server/tests/`, `scoring/tests/`, `agent/tests/`,
   70 tests) and CI (`.github/workflows/`) — see "Testing" and "CI /
   Releases" below for scope (full coverage for `server`/`scoring`; agent
   action modules covered for OS-portable logic only, real
   browser/Office/SMB driving stays hand-verified).
 
-**Nine bugs fixed along the way, worth knowing about if you're touching
+**Twelve bugs fixed along the way, worth knowing about if you're touching
 these files:**
 - `ActionSpec`/`IntentRecord`/`CompletionRecord` all carry `datetime`
   fields. Calling Pydantic's (deprecated) `.dict()` on them before
@@ -415,6 +425,41 @@ these files:**
   an attribute this module references, so the same class of bug against
   a *future* paramiko release would fail loudly in CI instead of only
   in someone's browser.
+- `install_windows()` only ever tried WinRM over HTTPS/5986, matching
+  `provisioning/inventory.ini.example`'s documented convention -- but a
+  real Windows 10 box only had an HTTP/5985 listener (plain
+  `Enable-PSRemoting` doesn't set up HTTPS unless someone explicitly
+  configures a cert), so every real Windows remote install was refused
+  outright. No test caught this either, for the same reason as the
+  DSSKey bug: fully mocked. Fixed by trying HTTPS first, then falling
+  back to HTTP automatically (`_WINRM_ENDPOINTS`), with a test that
+  asserts both endpoints get tried in order and a second-endpoint
+  success is returned rather than the first endpoint's failure winning.
+- `remote_install_route()`'s `download_url` used `str(request.base_url)`
+  -- the address *the admin's browser* reached the server on -- as the
+  address the *target* should fetch its install bundle from. Those
+  match by coincidence on the same machine (which is all any test here
+  could exercise) but not in general, and Remote Install's entire
+  premise is that the admin and the target are different machines --
+  exactly the OOB-vs-in-band addressing split this project's whole
+  network model exists to keep separate. Surfaced immediately testing
+  against a real target on a different network than the admin session:
+  the SSH/WinRM connection succeeded, but the target's own curl/
+  Invoke-WebRequest to "download the bundle" timed out reaching an
+  address that was never reachable from there. Fixed with an explicit
+  `remote_install_server_url` setting (Settings -> Remote Install) that
+  overrides the inferred address; falls back to `request.base_url` only
+  when unset, which is fine for same-machine/loopback testing but not
+  general use.
+- `install_windows()`'s PowerShell script's `Invoke-WebRequest` call
+  produced ~57MB of stderr for a single real ~51MB installer download --
+  its progress bar has nowhere to render non-interactively over WinRM,
+  so it serializes as one CLIXML progress record per chunk instead.
+  Harmless to the install itself (exit code and stdout were both
+  correct) but would have bloated every real remote-install response
+  and made its stderr output useless for actually debugging a failure.
+  Fixed with `$ProgressPreference = 'SilentlyContinue'` at the top of
+  the script; confirmed zero stderr bytes on a clean run afterward.
 
 **Still stubbed / not yet built:**
 1. Agent auth is a shared-bearer-token scheme (one token per host,

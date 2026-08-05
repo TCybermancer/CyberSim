@@ -58,18 +58,29 @@ def _load_ssh_private_key(pem: str) -> paramiko.PKey:
     raise RemoteInstallError(f"couldn't parse SSH private key (tried all supported types): {last_error}")
 
 
-def install_linux(ip: str, ssh_user: str, ssh_private_key_pem: str, download_url: str) -> dict:
+def install_linux(
+    ip: str,
+    ssh_user: str,
+    download_url: str,
+    ssh_private_key_pem: str | None = None,
+    ssh_password: str | None = None,
+) -> dict:
     """SSH to `ip` and run a one-liner: curl the install bundle from
     `download_url`, extract it, run install-linux.sh --silent. Returns
     {exit_code, stdout, stderr}; a non-zero exit_code means the install
     itself failed on the target (bad curl, tar, or install.sh error),
     still a "the call succeeded" result from this function's
     perspective -- only connection/auth failures raise
-    RemoteInstallError."""
-    try:
-        key = _load_ssh_private_key(ssh_private_key_pem)
-    except RemoteInstallError:
-        raise
+    RemoteInstallError.
+
+    Key-based auth is tried first if a private key is given (matches
+    provisioning/inventory.ini.example's convention); password auth is
+    the fallback, for hosts set up without a deployed key -- a real,
+    common case (e.g. a quick lab VM using a cloud image's default
+    password-auth account), not just a hypothetical."""
+    if not ssh_private_key_pem and not ssh_password:
+        raise RemoteInstallError("no SSH credential configured (need a private key or a password)")
+
     client = paramiko.SSHClient()
     # Lab/range network, not a host we have any prior trust relationship
     # with to check a known_hosts entry against -- see docs/README.md's
@@ -77,7 +88,13 @@ def install_linux(ip: str, ssh_user: str, ssh_private_key_pem: str, download_url
     # tradeoff here (this traffic never leaves the OOB management net).
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(ip, username=ssh_user, pkey=key, timeout=15)
+        if ssh_private_key_pem:
+            key = _load_ssh_private_key(ssh_private_key_pem)
+            client.connect(ip, username=ssh_user, pkey=key, timeout=15)
+        else:
+            client.connect(ip, username=ssh_user, password=ssh_password, timeout=15)
+    except RemoteInstallError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise RemoteInstallError(f"couldn't SSH to {ip}: {e}") from e
 
@@ -99,36 +116,61 @@ def install_linux(ip: str, ssh_user: str, ssh_private_key_pem: str, download_url
     return {"exit_code": exit_code, "stdout": out, "stderr": err}
 
 
+_WINRM_ENDPOINTS = (
+    "https://{ip}:5986/wsman",  # matches provisioning/inventory.ini.example's convention
+    "http://{ip}:5985/wsman",  # the far more common *actual* default -- plain `Enable-
+    # PSRemoting` on Windows doesn't set up an HTTPS listener unless someone explicitly
+    # configured one. Confirmed against a real Windows 10 target during manual
+    # verification: 5986 was refused outright, 5985 answered immediately.
+)
+
+
 def install_windows(ip: str, winrm_user: str, winrm_password: str, download_url: str) -> dict:
-    """WinRM (NTLM, HTTPS/5986, matching provisioning/inventory.ini.
-    example's existing convention) to `ip` and run a PowerShell one-
-    liner: download the install bundle from `download_url`, expand it,
-    run cybersim-agent-setup.exe /VERYSILENT. Same success/failure
-    split as install_linux: non-zero exit_code is a target-side install
-    failure, not an exception."""
-    session = winrm.Session(
-        f"https://{ip}:5986/wsman",
-        auth=(winrm_user, winrm_password),
-        transport="ntlm",
-        server_cert_validation="ignore",  # self-signed/no cert on a lab host is expected
-        operation_timeout_sec=170,
-        read_timeout_sec=180,
-    )
+    """WinRM (NTLM) to `ip` and run a PowerShell one-liner: download the
+    install bundle from `download_url`, expand it, run
+    cybersim-agent-setup.exe /VERYSILENT. Same success/failure split as
+    install_linux: non-zero exit_code is a target-side install failure,
+    not an exception.
+
+    Tries HTTPS/5986 first, then falls back to HTTP/5985 -- see
+    _WINRM_ENDPOINTS. A failed connection attempt here never touched the
+    target (WinRM's request/response model means nothing partial can
+    have run), so retrying the whole thing against the next endpoint is
+    safe."""
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
+# Invoke-WebRequest's progress bar has nowhere to render over WinRM, so
+# it serializes as CLIXML progress records instead -- one per chunk of
+# the download, which balloons a clean run's stderr to tens of
+# megabytes of noise for a real installer-sized file. Caught this
+# against a real Windows target (57MB of stderr for a 51MB download);
+# this suppresses it without touching -UseBasicParsing or anything
+# about the request itself.
+$ProgressPreference = 'SilentlyContinue'
 Invoke-WebRequest -UseBasicParsing -Uri '{download_url}' -OutFile "$env:TEMP\\cybersim-bundle.zip"
 Expand-Archive -Path "$env:TEMP\\cybersim-bundle.zip" -DestinationPath "$env:TEMP\\cybersim-install" -Force
 & "$env:TEMP\\cybersim-install\\cybersim-agent-setup.exe" /VERYSILENT
 exit $LASTEXITCODE
 """.strip()
 
-    try:
-        result = session.run_ps(ps_script)
-    except Exception as e:  # noqa: BLE001
-        raise RemoteInstallError(f"couldn't reach {ip} over WinRM: {e}") from e
+    errors = []
+    for endpoint_template in _WINRM_ENDPOINTS:
+        session = winrm.Session(
+            endpoint_template.format(ip=ip),
+            auth=(winrm_user, winrm_password),
+            transport="ntlm",
+            server_cert_validation="ignore",  # self-signed/no cert on a lab host is expected
+            operation_timeout_sec=170,
+            read_timeout_sec=180,
+        )
+        try:
+            result = session.run_ps(ps_script)
+            return {
+                "exit_code": result.status_code,
+                "stdout": result.std_out.decode(errors="replace"),
+                "stderr": result.std_err.decode(errors="replace"),
+            }
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{endpoint_template.format(ip=ip)}: {e}")
 
-    return {
-        "exit_code": result.status_code,
-        "stdout": result.std_out.decode(errors="replace"),
-        "stderr": result.std_err.decode(errors="replace"),
-    }
+    raise RemoteInstallError(f"couldn't reach {ip} over WinRM -- " + " | ".join(errors))

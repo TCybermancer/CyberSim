@@ -169,9 +169,12 @@ install.
 onto a host over the network, given just its IP and OS, instead of
 downloading and running an installer by hand on that host. Configure
 credentials once under Settings -> Remote Install (a default Linux SSH
-user + private key, and a default Windows WinRM user + password --
-masked at rest same as the LLM API keys), then every remote install
-after that only asks for IP/OS/Host ID/Persona.
+user + private key or password, and a default Windows WinRM user +
+password -- secrets masked at rest same as the LLM API keys), then
+every remote install after that only asks for IP/OS/Host ID/Persona.
+**Verified against real, separate SSH and WinRM targets** (a SIFT
+Workstation and a Windows 10 box), not just mocked -- see "Testing"
+below for what that surfaced.
 
 It doesn't push installer bytes over SSH/WinRM -- the ~50MB Windows
 installer alone makes that a bad idea over WinRM's SOAP transport.
@@ -188,6 +191,21 @@ target host never needs a standing credential of its own. The token
 pins the host_id/persona/os it was minted for, ignoring anything
 different in the request's own query string, so it can't be redirected
 to install as a different host than an admin actually approved.
+
+The bundle-download URL the target is told to use isn't simply
+inferred from the admin's own request -- that's only correct when the
+admin's browser and the target reach the server via the same address,
+which Remote Install's whole premise (admin and target are different
+machines) makes unreliable. Settings -> Remote Install's "server
+address" field overrides it explicitly (e.g. this server's OOB-network
+IP); left blank, it falls back to the admin's own request address,
+which is fine for same-machine/loopback testing but not general use.
+SSH connects over whichever of a private key or password is configured
+(key tried first if both are set); WinRM tries HTTPS/5986 first
+(matching `provisioning/inventory.ini.example`'s convention), then
+falls back to plain HTTP/5985 -- the far more common actual default,
+since `Enable-PSRemoting` on a plain Windows box doesn't set up an
+HTTPS listener unless someone explicitly configured one.
 
 ### Auth
 
@@ -360,12 +378,29 @@ module's entry above) and would need a much heavier CI setup (a real
 LibreOffice install, a downloaded Chromium, a real or loopback SMB
 share) to automate. Worth doing eventually; out of scope for now.
 Similarly, `remote_install.py`'s actual SSH/WinRM connection and command
-execution are mocked in `test_remote_install.py` (real key parsing and
-error-wrapping are covered; a real network round-trip against an actual
-target host is not) -- verified by hand instead, against an
-intentionally-unreachable test IP, confirming both the connection-
-failure path and the real `paramiko` key-parsing path work end to end
-through the live API.
+execution are mocked in `test_remote_install.py` (real key parsing,
+password-auth fallback, WinRM's HTTPS-then-HTTP fallback, and error-
+wrapping are all covered; a real network round-trip against an actual
+target host is not, by nature of what a unit test can reach). Verified
+by hand instead against two real, separate machines on a private
+VMware network -- a SIFT Workstation (SSH, password auth) and a Windows
+10 box (WinRM) -- with a full remote install actually completing on
+each: real systemd --user unit left `active (running)` on the Linux
+side, a real Scheduled Task registered "At logon time" with the correct
+target user on the Windows side, both confirmed by SSHing/WinRM'ing
+back in afterward and checking, not just trusting the reported exit
+code. Found and fixed three real bugs this way that no mock could have:
+WinRM defaulting to a refused HTTPS/5986 (real Windows 10 only sets up
+HTTP/5985 unless someone configures HTTPS explicitly) now falls back
+automatically; the download URL handed to the target defaulted to the
+admin's own request address, which isn't reachable from a genuinely
+separate target machine, now overridable via Settings; and
+`Invoke-WebRequest`'s progress bar serializing as ~57MB of CLIXML noise
+over WinRM (nowhere to render a progress bar non-interactively) is now
+suppressed. Both test installs were uninstalled afterward and confirmed
+gone (`install-linux.sh --uninstall`; the Windows uninstaller plus a
+manual cleanup of the one file -- `config.yaml` -- Inno Setup
+deliberately doesn't track for removal).
 
 ### CI / Releases
 

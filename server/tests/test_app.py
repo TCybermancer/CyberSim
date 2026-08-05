@@ -596,6 +596,7 @@ def test_default_settings_have_no_remote_install_credentials(client):
     body = resp.json()
     assert body["remote_linux_ssh_user"] is None
     assert body["remote_linux_ssh_key_set"] is False
+    assert body["remote_linux_ssh_password_set"] is False
     assert body["remote_windows_winrm_user"] is None
     assert body["remote_windows_winrm_password_set"] is False
 
@@ -606,6 +607,7 @@ def test_remote_install_settings_update_never_echoes_secrets(client):
         json={
             "remote_linux_ssh_user": "ansible_svc",
             "remote_linux_ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nsuper-secret\n-----END OPENSSH PRIVATE KEY-----",
+            "remote_linux_ssh_password": "forensics",
             "remote_windows_winrm_user": "svc_provisioning",
             "remote_windows_winrm_password": "hunter2",
         },
@@ -613,11 +615,14 @@ def test_remote_install_settings_update_never_echoes_secrets(client):
     assert resp.status_code == 200
     body = resp.json()
     assert "remote_linux_ssh_private_key" not in body
+    assert "remote_linux_ssh_password" not in body
     assert "remote_windows_winrm_password" not in body
     assert "super-secret" not in resp.text
+    assert "forensics" not in resp.text
     assert "hunter2" not in resp.text
     assert body["remote_linux_ssh_user"] == "ansible_svc"  # not a secret, echoed back
     assert body["remote_linux_ssh_key_set"] is True
+    assert body["remote_linux_ssh_password_set"] is True
     assert body["remote_windows_winrm_user"] == "svc_provisioning"
     assert body["remote_windows_winrm_password_set"] is True
 
@@ -673,12 +678,58 @@ def test_remote_install_linux_success(mock_install, client):
     assert body["stdout"] == "installed"
 
     # credentials came from Settings, not the request body
-    call_ip, call_user, call_key, call_url = mock_install.call_args[0]
+    call_ip, call_user, call_url, call_key, call_password = mock_install.call_args[0]
     assert call_ip == "10.99.0.50"
     assert call_user == "ansible_svc"
     assert call_key == "fake-key-material"
+    assert call_password is None
     assert "install_token=" in call_url
     assert "host_id=H1" in call_url
+
+
+@patch("remote_install.install_linux")
+def test_remote_install_download_url_uses_configured_server_url_override(mock_install, client):
+    """Regression test: request.base_url (whatever address the admin's
+    own browser used) is only correct by coincidence -- the target needs
+    to reach the server at an address *it* can route to, which isn't
+    guaranteed to match. Caught this testing against a real target on a
+    separate network from the admin session; Settings ->
+    remote_install_server_url exists to override it."""
+    client.put(
+        "/settings",
+        json={
+            "remote_linux_ssh_user": "ansible_svc",
+            "remote_linux_ssh_private_key": "fake-key-material",
+            "remote_install_server_url": "http://192.168.158.1:8000",
+        },
+    )
+    mock_install.return_value = {"exit_code": 0, "stdout": "installed", "stderr": ""}
+
+    client.post("/install/remote", json={"ip": "192.168.158.133", "os": "linux", "host_id": "H1"})
+
+    call_url = mock_install.call_args[0][2]
+    assert call_url.startswith("http://192.168.158.1:8000/install/agent-bundle?")
+
+
+@patch("remote_install.install_linux")
+def test_remote_install_linux_works_with_password_only(mock_install, client):
+    """No private key configured, just a password -- the fallback path
+    (a real, common lab setup, not just hypothetical)."""
+    client.put(
+        "/settings",
+        json={"remote_linux_ssh_user": "ubuntu", "remote_linux_ssh_password": "forensics"},
+    )
+    mock_install.return_value = {"exit_code": 0, "stdout": "installed", "stderr": ""}
+
+    resp = client.post("/install/remote", json={"ip": "192.168.158.133", "os": "linux", "host_id": "H1"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+    call_ip, call_user, _call_url, call_key, call_password = mock_install.call_args[0]
+    assert call_ip == "192.168.158.133"
+    assert call_user == "ubuntu"
+    assert call_key is None
+    assert call_password == "forensics"
 
 
 @patch("remote_install.install_linux")

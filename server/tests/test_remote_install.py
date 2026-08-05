@@ -50,17 +50,30 @@ def test_load_ssh_private_key_tolerates_a_paramiko_version_without_dsskey(monkey
     assert isinstance(key, paramiko.RSAKey)
 
 
-def test_install_linux_wraps_connection_failure_in_remote_install_error():
+def test_install_linux_wraps_connection_failure_in_remote_install_error(rsa_private_key_pem):
+    """A real, parseable key so this actually reaches the mocked
+    connect() -- a garbage key would raise for the wrong reason (key
+    parsing, not connection) and never exercise this path at all."""
     with patch.object(paramiko.SSHClient, "connect", side_effect=OSError("no route to host")):
         with pytest.raises(remote_install.RemoteInstallError):
             remote_install.install_linux(
-                "192.0.2.1", "ansible_svc", "not-a-real-key-but-never-parsed", "http://server/bundle"
+                "192.0.2.1", "ansible_svc", "http://server/bundle", ssh_private_key_pem=rsa_private_key_pem
             )
 
 
 def test_install_linux_wraps_key_parse_failure_in_remote_install_error():
     with pytest.raises(remote_install.RemoteInstallError):
-        remote_install.install_linux("192.0.2.1", "ansible_svc", "garbage", "http://server/bundle")
+        remote_install.install_linux(
+            "192.0.2.1", "ansible_svc", "http://server/bundle", ssh_private_key_pem="garbage"
+        )
+
+
+def test_install_linux_raises_when_no_credential_given():
+    """Neither a private key nor a password configured -- caught before
+    ever attempting a connection, with a clear message rather than
+    paramiko's own (less helpful) complaint about missing auth."""
+    with pytest.raises(remote_install.RemoteInstallError, match="no SSH credential"):
+        remote_install.install_linux("192.0.2.1", "ansible_svc", "http://server/bundle")
 
 
 def test_install_linux_runs_the_expected_remote_command(rsa_private_key_pem):
@@ -77,7 +90,10 @@ def test_install_linux_runs_the_expected_remote_command(rsa_private_key_pem):
         paramiko.SSHClient, "exec_command", return_value=(MagicMock(), mock_stdout, mock_stderr)
     ) as mock_exec, patch.object(paramiko.SSHClient, "close"):
         result = remote_install.install_linux(
-            "192.0.2.1", "ansible_svc", rsa_private_key_pem, "http://server/bundle?install_token=abc"
+            "192.0.2.1",
+            "ansible_svc",
+            "http://server/bundle?install_token=abc",
+            ssh_private_key_pem=rsa_private_key_pem,
         )
 
     assert result == {"exit_code": 0, "stdout": "installed", "stderr": ""}
@@ -87,11 +103,60 @@ def test_install_linux_runs_the_expected_remote_command(rsa_private_key_pem):
     assert "install-linux.sh --silent" in command
 
 
+def test_install_linux_falls_back_to_password_auth():
+    """No private key configured, just a password -- the fallback path
+    for hosts set up without a deployed key (a real, common lab setup,
+    not just hypothetical)."""
+    mock_stdout = MagicMock()
+    mock_stdout.channel.recv_exit_status.return_value = 0
+    mock_stdout.read.return_value = b"installed"
+    mock_stderr = MagicMock()
+    mock_stderr.read.return_value = b""
+
+    with patch.object(paramiko.SSHClient, "connect") as mock_connect, patch.object(
+        paramiko.SSHClient, "exec_command", return_value=(MagicMock(), mock_stdout, mock_stderr)
+    ), patch.object(paramiko.SSHClient, "close"):
+        result = remote_install.install_linux(
+            "192.168.158.133", "ubuntu", "http://server/bundle", ssh_password="forensics"
+        )
+
+    assert result == {"exit_code": 0, "stdout": "installed", "stderr": ""}
+    assert mock_connect.call_args.kwargs["password"] == "forensics"
+    assert "pkey" not in mock_connect.call_args.kwargs
+
+
 def test_install_windows_wraps_connection_failure_in_remote_install_error():
     with patch("winrm.Session") as mock_session_class:
         mock_session_class.return_value.run_ps.side_effect = Exception("connection refused")
         with pytest.raises(remote_install.RemoteInstallError):
             remote_install.install_windows("192.0.2.1", "svc_provisioning", "hunter2", "http://server/bundle")
+
+
+def test_install_windows_falls_back_from_https_to_http():
+    """Regression test: HTTPS/5986 (the documented convention, matching
+    provisioning/inventory.ini.example) was refused outright against a
+    real Windows 10 target during manual verification -- plain
+    `Enable-PSRemoting` only sets up an HTTP/5985 listener unless
+    someone explicitly configures HTTPS. Confirms both endpoints get
+    tried, in that order, and a success on the second one is returned
+    rather than the first one's failure winning."""
+    mock_result = MagicMock(status_code=0, std_out=b"installed", std_err=b"")
+    with patch("winrm.Session") as mock_session_class:
+        mock_session_class.return_value.run_ps.side_effect = [
+            Exception("[WinError 10061] actively refused"),
+            mock_result,
+        ]
+
+        result = remote_install.install_windows(
+            "192.168.158.130", "sansdfir", "dfirrocks", "http://server/bundle"
+        )
+
+    assert result == {"exit_code": 0, "stdout": "installed", "stderr": ""}
+    endpoints_tried = [call.args[0] for call in mock_session_class.call_args_list]
+    assert endpoints_tried == [
+        "https://192.168.158.130:5986/wsman",
+        "http://192.168.158.130:5985/wsman",
+    ]
 
 
 def test_install_windows_runs_the_expected_powershell():

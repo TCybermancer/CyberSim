@@ -93,8 +93,10 @@ function applySettings(s) {
 
   document.getElementById("remote-linux-user-input").value = s.remote_linux_ssh_user || "";
   document.getElementById("remote-linux-key-status").textContent = s.remote_linux_ssh_key_set ? "(configured — leave blank to keep it)" : "(not set)";
+  document.getElementById("remote-linux-password-status").textContent = s.remote_linux_ssh_password_set ? "(configured — leave blank to keep it)" : "(not set)";
   document.getElementById("remote-windows-user-input").value = s.remote_windows_winrm_user || "";
   document.getElementById("remote-windows-password-status").textContent = s.remote_windows_winrm_password_set ? "(configured — leave blank to keep it)" : "(not set)";
+  document.getElementById("remote-server-url-input").value = s.remote_install_server_url || "";
 }
 
 document.getElementById("connected-toggle").addEventListener("change", (e) => {
@@ -158,10 +160,13 @@ document.getElementById("remote-install-settings-form").addEventListener("submit
   const payload = {
     remote_linux_ssh_user: document.getElementById("remote-linux-user-input").value,
     remote_windows_winrm_user: document.getElementById("remote-windows-user-input").value,
+    remote_install_server_url: document.getElementById("remote-server-url-input").value,
   };
   // Same "blank means leave it alone" convention as the LLM API keys above.
   const sshKey = document.getElementById("remote-linux-key-input").value;
   if (sshKey) payload.remote_linux_ssh_private_key = sshKey;
+  const sshPassword = document.getElementById("remote-linux-password-input").value;
+  if (sshPassword) payload.remote_linux_ssh_password = sshPassword;
   const winrmPassword = document.getElementById("remote-windows-password-input").value;
   if (winrmPassword) payload.remote_windows_winrm_password = winrmPassword;
 
@@ -174,6 +179,7 @@ document.getElementById("remote-install-settings-form").addEventListener("submit
     });
     applySettings(updated);
     document.getElementById("remote-linux-key-input").value = "";
+    document.getElementById("remote-linux-password-input").value = "";
     document.getElementById("remote-windows-password-input").value = "";
     result.textContent = "remote install credentials saved";
     result.className = "result success";

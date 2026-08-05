@@ -338,8 +338,11 @@ def _mask_settings(s: dict) -> dict:
         # the LLM API keys above.
         "remote_linux_ssh_user": s.get("remote_linux_ssh_user"),
         "remote_linux_ssh_key_set": bool(s.get("remote_linux_ssh_private_key")),
+        "remote_linux_ssh_password_set": bool(s.get("remote_linux_ssh_password")),
         "remote_windows_winrm_user": s.get("remote_windows_winrm_user"),
         "remote_windows_winrm_password_set": bool(s.get("remote_windows_winrm_password")),
+        # Not a secret -- an address, echoed back plainly like the usernames above.
+        "remote_install_server_url": s.get("remote_install_server_url"),
         "updated_at": s.get("updated_at"),
     }
 
@@ -365,8 +368,10 @@ class SettingsUpdateRequest(BaseModel):
     local_model: str | None = None
     remote_linux_ssh_user: str | None = None
     remote_linux_ssh_private_key: str | None = None
+    remote_linux_ssh_password: str | None = None
     remote_windows_winrm_user: str | None = None
     remote_windows_winrm_password: str | None = None
+    remote_install_server_url: str | None = None
 
 
 @app.put("/settings", dependencies=[Depends(require_admin)])
@@ -1031,30 +1036,45 @@ async def remote_install_route(req: RemoteInstallRequest, request: Request):
     command itself failed (bad curl, tar, or installer exit code) is
     still a 200 with status="failed" and the captured stdout/stderr --
     that's a fact about the target host, not this request.
+
+    server_url: the *target* needs to reach this server, which isn't
+    necessarily reachable at whatever address *this request* (the
+    admin's browser) came in on -- that's only guaranteed to match on
+    the same machine/network path, and Remote Install's whole premise is
+    that the admin and the target are different machines. Settings ->
+    Remote Install's remote_install_server_url exists for exactly this
+    (e.g. this server's OOB-network IP); falls back to request.base_url
+    only when that's unset, which is correct for same-machine/loopback
+    testing but not general use. Caught this the hard way testing
+    against a real target on a separate network -- see db.py's column
+    comment.
     """
     settings = db.get_settings()
     token = auth.new_token()
     db.create_install_token(token, req.host_id, req.persona, req.os, datetime.utcnow().isoformat())
-    server_url = str(request.base_url).rstrip("/")
+    server_url = (settings.get("remote_install_server_url") or str(request.base_url)).rstrip("/")
     download_url = (
         f"{server_url}/install/agent-bundle?os={req.os}&host_id={req.host_id}"
         f"&persona={req.persona}&install_token={token}"
     )
 
     if req.os == "linux":
-        if not settings.get("remote_linux_ssh_user") or not settings.get("remote_linux_ssh_private_key"):
+        has_key = bool(settings.get("remote_linux_ssh_private_key"))
+        has_password = bool(settings.get("remote_linux_ssh_password"))
+        if not settings.get("remote_linux_ssh_user") or not (has_key or has_password):
             raise HTTPException(
                 400,
-                "Linux remote-install credentials aren't configured -- set them under "
-                "Settings -> Remote Install.",
+                "Linux remote-install credentials aren't configured -- set a username and "
+                "either a private key or a password under Settings -> Remote Install.",
             )
         try:
             result = await asyncio.to_thread(
                 remote_install.install_linux,
                 req.ip,
                 settings["remote_linux_ssh_user"],
-                settings["remote_linux_ssh_private_key"],
                 download_url,
+                settings.get("remote_linux_ssh_private_key"),
+                settings.get("remote_linux_ssh_password"),
             )
         except remote_install.RemoteInstallError as e:
             raise HTTPException(502, str(e))

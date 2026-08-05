@@ -123,10 +123,25 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- remote_* columns: credentials for POST /install/remote (Settings ->
 -- Remote Install tab), configured once and reused for every remote
 -- install rather than typed per-request. Same plaintext-at-rest
--- disclaimer as the LLM API keys above. SSH (Linux) is key-based to
--- match provisioning/inventory.ini.example's existing convention;
--- WinRM (Windows) is password-based since NTLM-transport WinRM doesn't
--- do public-key auth.
+-- disclaimer as the LLM API keys above. SSH (Linux) prefers a private
+-- key, matching provisioning/inventory.ini.example's existing
+-- convention, but also accepts a password as a fallback for hosts set
+-- up without a deployed key (remote_install.py tries the key first if
+-- both are set). WinRM (Windows) is password-only since NTLM-transport
+-- WinRM doesn't do public-key auth.
+--
+-- remote_install_server_url: overrides the address a remote-install
+-- *target* is told to fetch its bundle from -- app.py otherwise infers
+-- it from the admin's own request (request.base_url), which is only
+-- correct when the admin's browser and the target reach the server via
+-- the same address. That's not guaranteed -- it's the same OOB-vs-
+-- in-band addressing problem this whole project's network model
+-- exists to keep separate (see docs/README.md) -- and it's not
+-- hypothetical: caught this exact gap testing against a real target on
+-- a VMware host-only network reachable at a different IP than
+-- "localhost". Set explicitly (e.g. "http://192.168.158.1:8000") for
+-- Remote Install to be reliable at all; leave blank only for same-
+-- machine/loopback testing where request.base_url happens to work.
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_mode TEXT NOT NULL DEFAULT 'airgapped' CHECK (network_mode IN ('airgapped', 'connected')),
@@ -140,8 +155,10 @@ CREATE TABLE IF NOT EXISTS settings (
     local_model TEXT,
     remote_linux_ssh_user TEXT,
     remote_linux_ssh_private_key TEXT,
+    remote_linux_ssh_password TEXT,
     remote_windows_winrm_user TEXT,
     remote_windows_winrm_password TEXT,
+    remote_install_server_url TEXT,
     updated_at TEXT NOT NULL
 );
 """
@@ -462,8 +479,10 @@ _DEFAULT_SETTINGS = {
     "local_model": None,
     "remote_linux_ssh_user": None,
     "remote_linux_ssh_private_key": None,
+    "remote_linux_ssh_password": None,
     "remote_windows_winrm_user": None,
     "remote_windows_winrm_password": None,
+    "remote_install_server_url": None,
 }
 
 
@@ -492,9 +511,10 @@ def update_settings(updates: dict, updated_at: str) -> dict:
             INSERT INTO settings
                 (id, network_mode, llm_provider, anthropic_api_key, anthropic_model,
                  openai_api_key, openai_model, local_base_url, local_api_key, local_model,
-                 remote_linux_ssh_user, remote_linux_ssh_private_key,
-                 remote_windows_winrm_user, remote_windows_winrm_password, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 remote_linux_ssh_user, remote_linux_ssh_private_key, remote_linux_ssh_password,
+                 remote_windows_winrm_user, remote_windows_winrm_password,
+                 remote_install_server_url, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 network_mode=excluded.network_mode, llm_provider=excluded.llm_provider,
                 anthropic_api_key=excluded.anthropic_api_key, anthropic_model=excluded.anthropic_model,
@@ -503,8 +523,10 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                 local_model=excluded.local_model,
                 remote_linux_ssh_user=excluded.remote_linux_ssh_user,
                 remote_linux_ssh_private_key=excluded.remote_linux_ssh_private_key,
+                remote_linux_ssh_password=excluded.remote_linux_ssh_password,
                 remote_windows_winrm_user=excluded.remote_windows_winrm_user,
                 remote_windows_winrm_password=excluded.remote_windows_winrm_password,
+                remote_install_server_url=excluded.remote_install_server_url,
                 updated_at=excluded.updated_at
             """,
             (
@@ -519,8 +541,10 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                 merged["local_model"],
                 merged["remote_linux_ssh_user"],
                 merged["remote_linux_ssh_private_key"],
+                merged["remote_linux_ssh_password"],
                 merged["remote_windows_winrm_user"],
                 merged["remote_windows_winrm_password"],
+                merged["remote_install_server_url"],
                 updated_at,
             ),
         )
