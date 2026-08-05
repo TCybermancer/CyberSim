@@ -1,18 +1,33 @@
 ---
-# Provision a puppet user on a Windows host, and (optionally) an AD user
-# on the domain controller. Requires WinRM configured on targets, and the
-# `ansible.windows` / `microsoft.ad` collections installed on the control
-# node:
+# Provision a puppet identity on a Windows host. By default this now
+# domain-joins the host and creates the puppet persona as a real AD user
+# account -- that's what the host actually logs on as (a genuine Kerberos
+# logon session, not a lookalike local account), which matters for
+# anything AD-aware happening in the range (e.g. a red team Kerberoasting
+# the service accounts build_enterprise_structure.yml provisions -- see
+# that playbook and DEVELOPER_NOTES.md). Requires WinRM configured on
+# targets, and the `ansible.windows` / `microsoft.ad` collections
+# installed on the control node:
 #   ansible-galaxy collection install ansible.windows microsoft.ad
+#
+# Run build_enterprise_structure.yml first -- this playbook places the new
+# AD user object and (post-join) computer object into the OU tree it
+# creates.
 #
 # All WinRM traffic here rides the OOB NIC -- inventory.ini's
 # windows_hosts and domain_controller groups should resolve to OOB IPs
-# only. See docs/README.md.
+# only. The domain-join operation itself, though, needs the target host's
+# *in-band* NIC to already have the DC as its DNS server (that's what
+# dc_dns_config's reverse-zone/forwarder work is for) -- WinRM (OOB) just
+# drives the join command; the actual join traffic (LDAP/Kerberos/DNS to
+# the DC) rides whatever NIC the target's default DNS resolution uses,
+# which should be in-band. See docs/README.md.
 #
 # This playbook only creates the account(s) -- it doesn't install the
 # cybersim agent itself. That's a separate step, and there are two ways
 # to do it once this user exists:
-#   1. Log in as target_user and use the dashboard's own install page
+#   1. Log in as target_user (DOMAIN\target_user, once domain-joined) and
+#      use the dashboard's own install page
 #      (http://<server>/ui/install.html, Windows tab) -- downloads
 #      cybersim-agent-setup.exe, which autostarts via a Scheduled Task
 #      at logon.
@@ -20,30 +35,60 @@
 #      POST /install/remote), which does the equivalent over WinRM
 #      itself -- the same OOB connectivity this playbook already used
 #      to reach the host, so no extra network path to open up.
-# An earlier version of this playbook tried to install the agent
-# directly (copying agent/ source, running it as a Windows service) --
-# superseded once the real installer shipped (PyInstaller .exe + auto-
-# filled config.yaml + Scheduled-Task-at-logon autostart, deliberately
-# not a service, so a puppet host looks like a real logged-in user
-# working -- see docs/README.md).
+# The Scheduled Task's "at logon" trigger fires for a domain logon exactly
+# the same way it does for a local one -- domain-joining doesn't change
+# anything about how the installer/autostart mechanism works.
 #
 # Usage:
 #   ansible-playbook -i inventory.ini add_windows_user.yml \
-#     -e "target_user=jsmith target_persona=finance_analyst target_password=REDACTED"
-# Pass target_password as an ansible-vault-encrypted value (e.g.
+#     -e "target_user=jsmith target_persona=finance_analyst target_password=REDACTED domain_name=lab.local"
+#
+# Two independent toggles:
+#   domain_join=true (default)          -- join the host to domain_name and
+#                                           create target_user as the AD
+#                                           identity it logs on as
+#   create_local_account=false (default) -- also/instead create a plain
+#                                           local Windows account (the old,
+#                                           pre-domain-join behavior). Set
+#                                           domain_join=false
+#                                           create_local_account=true to
+#                                           reproduce the previous default
+#                                           exactly.
+#
+# Pass target_password (and domain_join_password, if overriding the vault
+# default) as ansible-vault-encrypted values (e.g.
 # `ansible-vault encrypt_string`) or via --ask-vault-pass with a vars
 # file, not typed in cleartext on a real shared shell -- see
 # group_vars/all/vault.yml.example's vault_<name> convention.
 
-- name: Provision local puppet user on the Windows host
+- name: Provision the Windows host's identity
   hosts: windows_hosts
   vars:
     target_user: "changeme"
     target_persona: "generic"
     target_password: "changeme"
+    domain_join: true
+    create_local_account: false
+    # domain_join_user / domain_join_password come from group_vars/all/vars.yml
+    # (-> vault_domain_join_user/password), same indirection as esxi_password
+    # etc. -- see group_vars/all/vars.yml.example.
 
   tasks:
-    - name: Ensure local puppet user exists
+    - name: Join the host to the domain
+      ansible.windows.win_domain_membership:
+        dns_domain_name: "{{ domain_name }}"
+        domain_admin_user: "{{ domain_join_user }}"
+        domain_admin_password: "{{ domain_join_password }}"
+        state: domain
+      when: domain_join
+      register: domain_join_result
+
+    - name: Reboot after a domain-join that requires it
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+      when: domain_join and domain_join_result.reboot_required
+
+    - name: Ensure a local puppet user also exists (create_local_account=true)
       ansible.windows.win_user:
         name: "{{ target_user }}"
         password: "{{ target_password }}"
@@ -51,17 +96,24 @@
         groups:
           - Users
         description: "cybersim puppet ({{ target_persona }})"
+      when: create_local_account
 
-- name: Optionally create the matching AD account on the domain controller
+- name: Create the puppet persona's AD identity, and place the computer object
   hosts: domain_controller
   vars:
     target_user: "changeme"
     target_persona: "generic"
     target_password: "changeme"
-    ad_ou: "OU=CyberSimPuppets,DC=corp,DC=local"
+    domain_join: true
+    # Derived from domain_name (e.g. lab.local -> DC=lab,DC=local) rather
+    # than a hard-coded domain -- the old CyberSimPuppets default assumed
+    # DC=corp,DC=local regardless of what domain was actually promoted.
+    domain_dn: "{{ domain_name.split('.') | map('regex_replace', '^(.*)$', 'DC=\\1') | join(',') }}"
+    ad_ou: "OU=Puppets,OU=CyberSim,{{ domain_dn }}"
+    ad_computer_ou: "OU=Workstations,OU=CyberSim,{{ domain_dn }}"
 
   tasks:
-    - name: Ensure AD user exists
+    - name: Ensure the puppet persona's AD user account exists
       microsoft.ad.user:
         name: "{{ target_user }}"
         firstname: "{{ target_user }}"
@@ -70,3 +122,17 @@
         enabled: true
         description: "cybersim puppet ({{ target_persona }})"
         state: present
+      when: domain_join
+
+    - name: Move each newly-joined computer object into OU=Workstations
+      # Runs against the DC (this play's hosts:), managing one computer
+      # object per Windows host this invocation joined -- not delegated to
+      # those hosts themselves, since microsoft.ad.computer manages AD
+      # objects from wherever the AD module/RSAT tools are (the DC), the
+      # same way the AD user task above does.
+      microsoft.ad.computer:
+        name: "{{ item }}"
+        path: "{{ ad_computer_ou }}"
+        state: present
+      when: domain_join
+      loop: "{{ groups['windows_hosts'] }}"

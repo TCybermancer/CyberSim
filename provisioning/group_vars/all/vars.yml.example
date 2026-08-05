@@ -13,6 +13,15 @@ template_guest_user: "{{ vault_template_guest_user }}"
 template_guest_password: "{{ vault_template_guest_password }}"
 dsrm_password: "{{ vault_dsrm_password }}"
 
+# --- add_windows_user.yml (domain-join) ---
+domain_join_user: "{{ vault_domain_join_user }}"
+domain_join_password: "{{ vault_domain_join_password }}"
+
+# --- build_enterprise_structure.yml (service-account passwords) ---
+svc_sql_password: "{{ vault_svc_sql_password }}"
+svc_web_password: "{{ vault_svc_web_password }}"
+svc_backup_password: "{{ vault_svc_backup_password }}"
+
 # --- Template prep (prepare_dc_template.yml, run once) ---
 source_vm_name: "FileServer"        # existing VM to generalize into a template
 dc_template_name: "dc-template-2012r2"  # name it's marked as after markastemplate

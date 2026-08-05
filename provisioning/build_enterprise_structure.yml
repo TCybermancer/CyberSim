@@ -1,0 +1,51 @@
+---
+# Builds a believable enterprise OU/group/service-account layout on an
+# already-promoted lab domain -- run this once after
+# build_domain_controller.yml, and before add_windows_user.yml (which now
+# domain-joins puppet hosts by default and places their computer objects
+# into the OU=Workstations OU this playbook creates).
+#
+# See roles/dc_enterprise_structure/tasks/main.yml for what gets created
+# and why a couple of the service accounts are deliberately kerberoastable
+# (weak password, RC4 permitted) -- and DEVELOPER_NOTES.md for the
+# detection-validation angle (Event ID 4769, RC4 ticket encryption).
+#
+# Usage:
+#   ansible-playbook -i inventory.ini build_enterprise_structure.yml --ask-vault-pass
+#
+# Extend enterprise_groups / service_accounts below (or override via
+# group_vars) to add more of either.
+
+- name: Build the CyberSim OU/group/service-account structure
+  hosts: domain_controller
+  gather_facts: false
+  vars:
+    enterprise_groups:
+      - name: IT-Admins
+        description: "cybersim enterprise structure -- IT department security group"
+      - name: Finance
+        description: "cybersim enterprise structure -- Finance department security group"
+      - name: HR
+        description: "cybersim enterprise structure -- HR department security group"
+
+    service_accounts:
+      - name: svc_sql
+        description: "cybersim enterprise structure -- SQL Server service account"
+        spn:
+          - "MSSQLSvc/sql01.{{ domain_name }}:1433"
+        password: "{{ svc_sql_password }}"
+        weak: true
+      - name: svc_web
+        description: "cybersim enterprise structure -- intranet web service account"
+        spn:
+          - "HTTP/intranet.{{ domain_name }}"
+        password: "{{ svc_web_password }}"
+        weak: true
+      - name: svc_backup
+        description: "cybersim enterprise structure -- backup agent service account"
+        spn:
+          - "svc_backup/veeam.{{ domain_name }}"
+        password: "{{ svc_backup_password }}"
+        weak: false
+  roles:
+    - dc_enterprise_structure

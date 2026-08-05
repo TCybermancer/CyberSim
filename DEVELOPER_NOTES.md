@@ -53,9 +53,14 @@ accounts, API keys) in scenario configs for a system this touches.
   and reports ground truth back over OOB. `actions/` is a pluggable
   registry — one module per action type.
 - **Provisioning** (`provisioning/`): Ansible playbooks for adding
-  puppet users/services on Linux (SSH) and Windows (WinRM), plus an
-  optional AD account on the domain controller. All provisioning traffic
-  rides OOB.
+  puppet users/services on Linux (SSH) and Windows (WinRM). Windows
+  puppet hosts are domain-joined by default, logging on as a real AD
+  account rather than a lookalike local one (`create_local_account: true`
+  reproduces the old local-only behavior); `build_enterprise_structure.yml`
+  builds a realistic OU/group/service-account layout on the domain,
+  including a couple of deliberately kerberoastable service accounts --
+  see "Provisioning a lab domain controller" below. All provisioning
+  traffic rides OOB.
 - **Scoring** (`scoring/`): standalone module + CLI. Reads a run's
   ground-truth ledger over the API (it doesn't touch the SQLite DB
   directly — same read path the UI uses) and a detection tool's alert
@@ -153,6 +158,67 @@ See `provisioning/group_vars/all/vars.yml.example` and
 `vault.yml.example` for what to copy, fill in, and (for the vault file)
 encrypt with `ansible-vault encrypt group_vars/all/vault.yml` before
 running either playbook.
+
+### Enterprise structure and puppet-host domain-join
+
+A freshly-promoted forest from `build_domain_controller.yml` is a bare
+skeleton -- no OUs, no groups, no service accounts, nothing for a red
+team to actually work against. Two things fix that, run in this order:
+
+1. **`build_enterprise_structure.yml`** (`roles/dc_enterprise_structure/`):
+   builds an `OU=CyberSim` tree (`Tier0-Admins`, `ServiceAccounts`,
+   `Workstations`, `Puppets`, `Groups`), a handful of department-flavored
+   security groups, and a handful of service accounts with real SPNs
+   (`svc_sql` -> `MSSQLSvc/sql01.<domain>:1433`, `svc_web` ->
+   `HTTP/intranet.<domain>`, `svc_backup` -> `svc_backup/veeam.<domain>`).
+   `svc_sql` and `svc_web` are deliberately configured the way a real,
+   neglected enterprise service account often is: RC4 still permitted
+   (`msDS-SupportedEncryptionTypes` left at `4` instead of forced to
+   AES-only) and a password that's never rotated. That's not an
+   oversight -- it's the actual misconfiguration that makes Kerberoasting
+   viable at all, so a couple of accounts need to have it on purpose, the
+   same way a `should_alert: true` scenario step is a deliberate,
+   documented gap for detection tooling to find (see "Determinism for
+   validation" below). **Nothing in this repo performs the roast** --
+   that's on the red team's own tooling (Rubeus, Impacket's
+   `GetUserSPNs.py`, PowerView, etc.), now pointed at something real
+   instead of nothing.
+
+   The signal a blue team should be watching for: Windows Security Event
+   ID **4769** ("A Kerberos service ticket was requested") with **Ticket
+   Encryption Type `0x17`** (RC4-HMAC) against one of these SPNs -- a
+   burst of 4769s across many SPNs in a short window from one account is
+   the other classic tell (broad enumeration, not routine service use).
+
+2. **`add_windows_user.yml`**: now domain-joins the Windows host by
+   default (`domain_join: true`) via `ansible.windows.win_domain_membership`
+   + a reboot when required, and creates the puppet persona as a real AD
+   user (`OU=Puppets,OU=CyberSim,...`) rather than a same-named-but-
+   different-SID local account -- that's what the host actually logs on
+   as, so there's a genuine Kerberos logon session behind it rather than
+   just a look-alike. The resulting computer object gets moved from AD's
+   default `CN=Computers` into `OU=Workstations,OU=CyberSim,...` to keep
+   the tree meaningful. `create_local_account: true` still creates a
+   plain local Windows account alongside (or instead of, with
+   `domain_join: false`) the domain identity -- the pre-existing behavior
+   is fully preserved behind that toggle, it's just no longer the
+   default. Needs a dedicated join credential
+   (`vault_domain_join_user`/`vault_domain_join_password` --
+   intentionally separate from the template-prep and WinRM-provisioning
+   credentials already in `vault.yml.example`, since domain-join needs
+   real "join a computer to the domain" rights).
+
+   Domain-join itself needs the target's *in-band* NIC to already resolve
+   the domain via DNS pointed at the DC -- that's what `dc_dns_config`'s
+   reverse-zone/forwarder work already sets up for in-band clients. WinRM
+   (OOB) only drives the join *command*; the actual join traffic
+   (LDAP/Kerberos/DNS to the DC) rides whatever NIC the host's default DNS
+   resolution uses.
+
+   Linux puppet hosts are **not** domain-joined by anything here --
+   `add_linux_user.yml` is unchanged. Realm-joining Linux (sssd/realmd)
+   is a different enough problem to be its own piece of work; see "Still
+   stubbed" below.
 
 ## Determinism for validation
 
@@ -505,6 +571,12 @@ these files:**
    loopback SMB share to exercise those, which is a heavier CI setup
    than was worth building for the initial suite. Those paths stay
    hand-verified for now (see each action module's entry above).
+7. Linux puppet hosts aren't domain-joined -- only Windows hosts get the
+   `win_domain_membership` treatment in `add_windows_user.yml` (see
+   "Enterprise structure and puppet-host domain-join" above). Realm-
+   joining Linux to the same AD domain (sssd/realmd, `community.general.
+   realm_membership` or equivalent) is different enough work to be its
+   own follow-up, not built here.
 
 ## Running the prototype locally (single machine, no real OOB yet)
 

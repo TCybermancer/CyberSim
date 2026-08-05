@@ -19,3 +19,22 @@ vault_template_guest_password: "changeme"
 # Directory Services Restore Mode (DSRM) password for the new forest --
 # required by dcpromo, needed again for any future authoritative restore.
 vault_dsrm_password: "changeme"
+
+# Domain-join credentials (win_domain_membership, add_windows_user.yml) --
+# needs real "join a computer to the domain" rights. Distinct from
+# vault_template_guest_user/password above (guest-ops on the DC template,
+# not the domain) and vault_provisioning_password below (the shared WinRM
+# provisioning account) -- keep this one scoped to just domain-join rather
+# than reusing a broader credential.
+vault_domain_join_user: "changeme"
+vault_domain_join_password: "changeme"
+
+# Service-account passwords (build_enterprise_structure.yml). svc_sql and
+# svc_web are deliberately weak/stale on purpose -- see
+# roles/dc_enterprise_structure/tasks/main.yml and DEVELOPER_NOTES.md for
+# why. Still real values here, not literally "changeme" in a live range --
+# a red team searching for a genuinely bad password should find one that
+# looks stale/reused, not a placeholder.
+vault_svc_sql_password: "changeme"
+vault_svc_web_password: "changeme"
+vault_svc_backup_password: "changeme"

@@ -1,0 +1,107 @@
+---
+# Builds a believable enterprise OU/group/service-account layout on top of
+# the bare forest dc_ad_forest promotes -- today that role does nothing
+# past dcpromo, so every object here (OUs, groups, service accounts) is
+# genuinely new, not just re-parenting existing ones. Idempotent: safe to
+# re-run against an already-built domain, same convention as the rest of
+# provisioning/.
+#
+# Layout:
+#   OU=CyberSim,<domain_dn>
+#     OU=Tier0-Admins     -- privileged/admin-tier identities (empty for now;
+#                            a home for anything add_windows_user.yml or a
+#                            future playbook wants to mark as Tier 0)
+#     OU=ServiceAccounts  -- the SPN-bearing accounts below
+#     OU=Workstations     -- where add_windows_user.yml moves a puppet
+#                            host's *computer* object after domain-join
+#     OU=Puppets          -- where add_windows_user.yml creates each puppet
+#                            persona's *user* object (replaces the old,
+#                            ungrouped OU=CyberSimPuppets default)
+#     OU=Groups           -- department-flavored security groups
+#
+# Extend the `enterprise_groups` and `service_accounts` lists below to add
+# more of either -- this role doesn't try to mechanically mirror every
+# persona/org in server/scenarios/*.yaml (there are ~90), just enough to
+# make the domain look organizationally real.
+#
+# Service accounts and SPNs: a couple of these (see `weak: true` below) are
+# deliberately configured the way real, neglected enterprise service
+# accounts often are -- RC4 encryption still permitted
+# (msDS-SupportedEncryptionTypes left unset rather than forced to
+# AES-only) and a stale password that's never rotated. That's not an
+# oversight: it's the actual real-world misconfiguration that makes
+# Kerberoasting viable at all, so it needs to exist here on purpose for a
+# red team to find, the same way should_alert scenario steps exist as a
+# deliberate, documented gap for detection tooling to catch (see
+# DEVELOPER_NOTES.md). A real attack tool (Rubeus, Impacket's
+# GetUserSPNs.py, PowerView, etc.) run by the red team is what actually
+# performs the roast -- nothing in this repo does.
+#
+# The classic detection signal a blue team should be watching for here:
+# Windows Security Event ID 4769 ("A Kerberos service ticket was
+# requested") with Ticket Encryption Type 0x17 (RC4-HMAC) for one of these
+# SPNs -- see DEVELOPER_NOTES.md.
+
+- name: Compute the domain's DN (DC=... components) from domain_name
+  ansible.builtin.set_fact:
+    domain_dn: "{{ domain_name.split('.') | map('regex_replace', '^(.*)$', 'DC=\\1') | join(',') }}"
+
+- name: Ensure the top-level CyberSim OU exists
+  microsoft.ad.ou:
+    name: CyberSim
+    path: "{{ domain_dn }}"
+    state: present
+
+- name: Ensure the CyberSim sub-OUs exist
+  microsoft.ad.ou:
+    name: "{{ item }}"
+    path: "OU=CyberSim,{{ domain_dn }}"
+    state: present
+  loop:
+    - Tier0-Admins
+    - ServiceAccounts
+    - Workstations
+    - Puppets
+    - Groups
+
+- name: Ensure department-flavored security groups exist
+  microsoft.ad.group:
+    name: "{{ item.name }}"
+    scope: global
+    category: security
+    path: "OU=Groups,OU=CyberSim,{{ domain_dn }}"
+    description: "{{ item.description }}"
+    state: present
+  loop: "{{ enterprise_groups }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Ensure kerberoastable service accounts exist
+  microsoft.ad.user:
+    name: "{{ item.name }}"
+    firstname: "{{ item.name }}"
+    password: "{{ item.password }}"
+    password_never_expires: true
+    path: "OU=ServiceAccounts,OU=CyberSim,{{ domain_dn }}"
+    description: "{{ item.description }}"
+    enabled: true
+    spn:
+      set: "{{ item.spn }}"
+    # microsoft.ad.user's spn parameter shape (set/add/remove list vs. a
+    # bare list) varies by collection version -- confirm against
+    # `ansible-doc microsoft.ad.user` for whatever version requirements.yml
+    # actually resolves before relying on this in a real run.
+    #
+    # Left unset (rather than forced AES-only) on weak: true accounts, so
+    # the KDC still honors RC4 for them -- see the role header comment.
+    attributes:
+      set:
+        msDS-SupportedEncryptionTypes: "{{ 4 if item.weak | default(false) else 24 }}"
+        # 4  = RC4-HMAC only (weak/legacy, what makes a hash worth cracking)
+        # 24 = AES128 + AES256 only (modern default posture for the rest)
+    state: present
+  no_log: true  # passwords in `item` -- loop_control.label below still
+                # identifies which account each iteration touched
+  loop: "{{ service_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
