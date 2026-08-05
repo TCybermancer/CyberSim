@@ -478,14 +478,16 @@ directly.
 
 ### Server
 
-Two supported ways to run the orchestrator on a real Linux host; pick
-one, not both.
+Run the orchestrator with Docker on Linux or Windows, or install it as a
+native Linux service. Pick one deployment method.
 
 **Docker** (`server/Dockerfile`, `server/docker-compose.yml`):
 
 The prebuilt Linux/amd64 image is published at
 `ghcr.io/tcybermancer/cybersim-server:latest`. For Compose, download the
 single compose file; the rest of the repository is not required.
+
+On Linux:
 
 ```bash
 mkdir cybersim-server && cd cybersim-server
@@ -495,7 +497,28 @@ docker compose pull
 docker compose up -d
 ```
 
-To update later:
+On Windows 10/11, install Docker Desktop, enable its WSL 2 backend, and
+make sure Docker Desktop is using Linux containers. Then run in PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Path CyberSim-Server
+Set-Location CyberSim-Server
+
+Invoke-WebRequest `
+  -Uri "https://raw.githubusercontent.com/TCybermancer/CyberSim/main/server/docker-compose.yml" `
+  -OutFile "docker-compose.yml"
+
+$env:CYBERSIM_ADMIN_PASSWORD = "replace-with-a-long-random-password"
+docker compose pull
+docker compose up -d
+```
+
+Open `http://localhost:8000/ui/`. Use `docker compose logs -f` to follow
+the server logs, `docker compose restart` to restart it, and `docker
+compose down` to stop it. The named data volume survives `down`; do not
+use `docker compose down -v` unless you intend to delete CyberSim's data.
+
+To update a Linux installation later:
 
 ```bash
 cd cybersim-server
@@ -503,6 +526,10 @@ export CYBERSIM_ADMIN_PASSWORD='the-same-password-or-a-new-one'
 docker compose pull
 docker compose up -d
 ```
+
+On Windows, set `$env:CYBERSIM_ADMIN_PASSWORD` in the new PowerShell
+session, then run the same `docker compose pull` and `docker compose up -d`
+commands from the `CyberSim-Server` directory.
 
 For a one-command deployment without Compose, create a named volume and use
 `docker run -d --name cybersim-server --restart unless-stopped -p 8000:8000
