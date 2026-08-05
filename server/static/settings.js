@@ -1,5 +1,7 @@
-// Network/LLM settings page (admin only). Self-contained small api()
-// helper, same as users.js, since this page doesn't load app.js.
+// Settings page: "General" (network/LLM config, admin only) and
+// "Security" (self-service password change, every logged-in role) tabs.
+// Self-contained small api() helper, same as users.js, since this page
+// doesn't load app.js.
 
 async function api(path, opts) {
   const res = await authedFetch(path, opts);
@@ -15,6 +17,58 @@ async function api(path, opts) {
   }
   return res.status === 204 ? null : res.json();
 }
+
+// ---- tabs -------------------------------------------------------------
+
+function selectTab(name) {
+  const tabs = { general: "tab-general", security: "tab-security" };
+  const buttons = { general: "tab-btn-general", security: "tab-btn-security" };
+  for (const key of Object.keys(tabs)) {
+    const active = key === name;
+    document.getElementById(tabs[key]).style.display = active ? "" : "none";
+    const btn = document.getElementById(buttons[key]);
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+}
+
+document.getElementById("tab-btn-general").addEventListener("click", () => selectTab("general"));
+document.getElementById("tab-btn-security").addEventListener("click", () => selectTab("security"));
+
+// ---- change password (any logged-in role) ------------------------------
+
+document.getElementById("password-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const result = document.getElementById("password-result");
+  const submitBtn = e.target.querySelector("button[type=submit]");
+
+  const current_password = document.getElementById("current-password-input").value;
+  const new_password = document.getElementById("new-password-input").value;
+  const confirm_password = document.getElementById("confirm-password-input").value;
+
+  if (new_password !== confirm_password) {
+    result.textContent = "new password and confirmation don't match";
+    result.className = "result error";
+    return;
+  }
+
+  submitBtn.disabled = true;
+  try {
+    await api("/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password, new_password }),
+    });
+    e.target.reset();
+    result.textContent = "password changed";
+    result.className = "result success";
+  } catch (err) {
+    result.textContent = `couldn't change password: ${err.message}`;
+    result.className = "result error";
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
 
 function showProviderFields(provider) {
   document.querySelectorAll(".provider-fields").forEach((el) => (el.style.display = "none"));
@@ -96,6 +150,11 @@ document.getElementById("settings-form").addEventListener("submit", async (e) =>
   if (user.role !== "admin") {
     document.getElementById("settings-card").style.display = "none";
     document.getElementById("viewer-blocked-card").style.display = "";
+    // Non-admins can't touch General at all -- land them on the one tab
+    // that's actually theirs (changing their own password) instead of a
+    // dead end.
+    document.getElementById("tab-btn-general").style.display = "none";
+    selectTab("security");
     return;
   }
   try {

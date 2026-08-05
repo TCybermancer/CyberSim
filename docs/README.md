@@ -147,10 +147,14 @@ docstring for the full reasoning):
   mints a live agent credential) all require `admin`. A built-in
   `admin` account is bootstrapped at first startup: set
   `CYBERSIM_ADMIN_PASSWORD` to pin its password, or leave it unset and
-  the server generates one once, printed to its own startup logs (shown
-  a single time -- save it, or just set the env var instead and
-  restart; changing the env var and restarting rotates that account's
-  password). Once logged in as an admin, create more accounts
+  the server defaults it to the password `admin` once (a known,
+  out-of-the-box credential rather than a generated one -- a loud
+  warning prints at startup either way, and it's never re-applied on a
+  later startup once the account exists, so it won't stomp on a
+  password you've since changed). Change it immediately after first
+  login under Settings -> Security (`POST /auth/change-password`,
+  self-service for whichever account you're logged in as, any role --
+  not just admin). Once logged in as an admin, create more accounts
   (including more admins) at `http://<server>/ui/users.html` or via
   `POST /users`. Log in at `http://<server>/ui/login.html`; the
   dashboard redirects there automatically on any 401.

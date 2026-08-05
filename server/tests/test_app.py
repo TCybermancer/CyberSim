@@ -278,6 +278,75 @@ def test_logout_revokes_session(client):
     assert client.get("/runs").status_code == 401
 
 
+def test_ensure_admin_user_defaults_password_to_admin_when_no_env_var(monkeypatch):
+    """The autouse isolated_db fixture pins CYBERSIM_ADMIN_PASSWORD for
+    every other test so they can log in with a known value -- this test
+    deliberately removes it to exercise the real fresh-install path,
+    where no env var means the built-in account should bootstrap with
+    the literal password "admin" (not a random, hard-to-discover one)."""
+    monkeypatch.delenv("CYBERSIM_ADMIN_PASSWORD", raising=False)
+    with TestClient(app_module.app) as c:
+        resp = c.post("/auth/login", json={"username": "admin", "password": "admin"})
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "admin"
+
+
+def test_change_password_success(client):
+    resp = client.post(
+        "/auth/change-password",
+        json={"current_password": TEST_ADMIN_PASSWORD, "new_password": "brand-new-password123"},
+    )
+    assert resp.status_code == 200
+
+    assert client.post(
+        "/auth/login", json={"username": "admin", "password": TEST_ADMIN_PASSWORD}
+    ).status_code == 401
+    assert client.post(
+        "/auth/login", json={"username": "admin", "password": "brand-new-password123"}
+    ).status_code == 200
+
+
+def test_change_password_wrong_current_password_rejected(client):
+    resp = client.post(
+        "/auth/change-password",
+        json={"current_password": "totally-wrong", "new_password": "brand-new-password123"},
+    )
+    assert resp.status_code == 401
+    # original password is untouched
+    assert client.post(
+        "/auth/login", json={"username": "admin", "password": TEST_ADMIN_PASSWORD}
+    ).status_code == 200
+
+
+def test_change_password_too_short_rejected(client):
+    resp = client.post(
+        "/auth/change-password",
+        json={"current_password": TEST_ADMIN_PASSWORD, "new_password": "short"},
+    )
+    assert resp.status_code == 422
+
+
+def test_change_password_works_for_viewer_role_too(viewer_client):
+    """Self-service, not admin-only -- any logged-in account can change
+    its own password."""
+    resp = viewer_client.post(
+        "/auth/change-password",
+        json={"current_password": "viewer-password", "new_password": "new-viewer-password123"},
+    )
+    assert resp.status_code == 200
+    assert viewer_client.post(
+        "/auth/login", json={"username": "viewer1", "password": "new-viewer-password123"}
+    ).status_code == 200
+
+
+def test_change_password_requires_auth(anon_client):
+    resp = anon_client.post(
+        "/auth/change-password",
+        json={"current_password": "x", "new_password": "irrelevant-but-long-enough"},
+    )
+    assert resp.status_code == 401
+
+
 def test_static_ui_is_reachable_without_a_session(anon_client):
     resp = anon_client.get("/ui/")
     assert resp.status_code == 200

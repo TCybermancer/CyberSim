@@ -148,6 +148,30 @@ main {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .card-header h2 { margin: 0; }
 
+/* ---- tab bar (e.g. settings.html's General / Security) ------------------ */
+
+.tab-bar {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.1rem;
+}
+
+.tab-button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.55rem 0.15rem;
+  margin-bottom: -1px;
+  cursor: pointer;
+  margin-right: 1.1rem;
+}
+.tab-button:hover { color: var(--text); }
+.tab-button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
 form label {
   display: block;
   font-size: 0.8rem;

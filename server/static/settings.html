@@ -10,7 +10,7 @@
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=12">
+<link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
 <div class="app-shell">
@@ -31,78 +31,113 @@
 
 <main style="grid-template-columns: 1fr; max-width: 560px;">
   <section class="col">
-    <div class="card" id="viewer-blocked-card" style="display:none">
-      <h2>Admin access required</h2>
-      <p class="hint" style="margin-top:0">Changing network/LLM settings requires an admin account.</p>
-    </div>
+    <div class="card">
+      <div class="tab-bar" role="tablist">
+        <button type="button" id="tab-btn-general" class="tab-button active" role="tab" aria-selected="true">General</button>
+        <button type="button" id="tab-btn-security" class="tab-button" role="tab" aria-selected="false">Security</button>
+      </div>
 
-    <div class="card" id="settings-card">
-      <h2>Network &amp; content generation</h2>
-      <p class="hint" style="margin-top:0">
-        Controls whether the server can call out to an LLM for realistic scenario content
-        (like a role-appropriate email body) at run-launch time. Agents themselves never make
-        this call — only this server does, and only when set to "connected". Runs launched
-        with an explicit seed (replays) always use the static template library regardless of
-        this setting, to keep exact reproducibility.
-      </p>
-
-      <form id="settings-form">
-        <label class="checkbox-label" style="margin-bottom:0.9rem">
-          <input type="checkbox" id="connected-toggle">
-          Connected <span class="hint">(unchecked = airgapped — no outbound calls, ever)</span>
-        </label>
-
-        <div id="provider-fields" style="display:none">
-          <label>
-            LLM provider
-            <select id="provider-select">
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="openai">OpenAI</option>
-              <option value="local">Local / self-hosted (OpenAI-compatible)</option>
-            </select>
-          </label>
-
-          <div id="anthropic-fields" class="provider-fields">
-            <label>
-              Anthropic API key <span id="anthropic-key-status" class="hint"></span>
-              <input id="anthropic-key-input" type="password" placeholder="sk-ant-...">
-            </label>
-            <label>
-              Model <span class="hint">(optional — defaults to claude-sonnet-4-5)</span>
-              <input id="anthropic-model-input" type="text" placeholder="claude-sonnet-4-5">
-            </label>
-          </div>
-
-          <div id="openai-fields" class="provider-fields">
-            <label>
-              OpenAI API key <span id="openai-key-status" class="hint"></span>
-              <input id="openai-key-input" type="password" placeholder="sk-...">
-            </label>
-            <label>
-              Model <span class="hint">(optional — defaults to gpt-4o-mini)</span>
-              <input id="openai-model-input" type="text" placeholder="gpt-4o-mini">
-            </label>
-          </div>
-
-          <div id="local-fields" class="provider-fields">
-            <label>
-              Base URL <span class="hint">(OpenAI-compatible, e.g. http://localhost:11434/v1)</span>
-              <input id="local-url-input" type="text" placeholder="http://localhost:11434/v1">
-            </label>
-            <label>
-              Model
-              <input id="local-model-input" type="text" placeholder="llama3.1">
-            </label>
-            <label>
-              API key <span class="hint">(optional — most local servers don't need one)</span> <span id="local-key-status" class="hint"></span>
-              <input id="local-key-input" type="password">
-            </label>
-          </div>
+      <div id="tab-general" role="tabpanel">
+        <div id="viewer-blocked-card" style="display:none">
+          <p class="hint" style="margin-top:0">Changing network/LLM settings requires an admin account.</p>
         </div>
 
-        <button type="submit">Save settings</button>
-      </form>
-      <div id="settings-result" class="result"></div>
+        <div id="settings-card">
+          <h2>Network &amp; content generation</h2>
+          <p class="hint" style="margin-top:0">
+            Controls whether the server can call out to an LLM for realistic scenario content
+            (like a role-appropriate email body) at run-launch time. Agents themselves never make
+            this call — only this server does, and only when set to "connected". Runs launched
+            with an explicit seed (replays) always use the static template library regardless of
+            this setting, to keep exact reproducibility.
+          </p>
+
+          <form id="settings-form">
+            <label class="checkbox-label" style="margin-bottom:0.9rem">
+              <input type="checkbox" id="connected-toggle">
+              Connected <span class="hint">(unchecked = airgapped — no outbound calls, ever)</span>
+            </label>
+
+            <div id="provider-fields" style="display:none">
+              <label>
+                LLM provider
+                <select id="provider-select">
+                  <option value="anthropic">Anthropic (Claude)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="local">Local / self-hosted (OpenAI-compatible)</option>
+                </select>
+              </label>
+
+              <div id="anthropic-fields" class="provider-fields">
+                <label>
+                  Anthropic API key <span id="anthropic-key-status" class="hint"></span>
+                  <input id="anthropic-key-input" type="password" placeholder="sk-ant-...">
+                </label>
+                <label>
+                  Model <span class="hint">(optional — defaults to claude-sonnet-4-5)</span>
+                  <input id="anthropic-model-input" type="text" placeholder="claude-sonnet-4-5">
+                </label>
+              </div>
+
+              <div id="openai-fields" class="provider-fields">
+                <label>
+                  OpenAI API key <span id="openai-key-status" class="hint"></span>
+                  <input id="openai-key-input" type="password" placeholder="sk-...">
+                </label>
+                <label>
+                  Model <span class="hint">(optional — defaults to gpt-4o-mini)</span>
+                  <input id="openai-model-input" type="text" placeholder="gpt-4o-mini">
+                </label>
+              </div>
+
+              <div id="local-fields" class="provider-fields">
+                <label>
+                  Base URL <span class="hint">(OpenAI-compatible, e.g. http://localhost:11434/v1)</span>
+                  <input id="local-url-input" type="text" placeholder="http://localhost:11434/v1">
+                </label>
+                <label>
+                  Model
+                  <input id="local-model-input" type="text" placeholder="llama3.1">
+                </label>
+                <label>
+                  API key <span class="hint">(optional — most local servers don't need one)</span> <span id="local-key-status" class="hint"></span>
+                  <input id="local-key-input" type="password">
+                </label>
+              </div>
+            </div>
+
+            <button type="submit">Save settings</button>
+          </form>
+          <div id="settings-result" class="result"></div>
+        </div>
+      </div>
+
+      <div id="tab-security" role="tabpanel" style="display:none">
+        <h2>Change your password</h2>
+        <p class="hint" style="margin-top:0">
+          Applies to whichever account you're logged in as. A fresh install's built-in
+          <code>admin</code> account starts with the password <code>admin</code> unless
+          <code>CYBERSIM_ADMIN_PASSWORD</code> was set before first startup — change it here
+          as your first step.
+        </p>
+
+        <form id="password-form">
+          <label>
+            Current password
+            <input id="current-password-input" type="password" required autocomplete="current-password">
+          </label>
+          <label>
+            New password <span class="hint">(at least 8 characters)</span>
+            <input id="new-password-input" type="password" required minlength="8" autocomplete="new-password">
+          </label>
+          <label>
+            Confirm new password
+            <input id="confirm-password-input" type="password" required minlength="8" autocomplete="new-password">
+          </label>
+          <button type="submit">Change password</button>
+        </form>
+        <div id="password-result" class="result"></div>
+      </div>
     </div>
   </section>
 </main>
@@ -111,6 +146,6 @@
 
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=3"></script>
-<script src="settings.js?v=1"></script>
+<script src="settings.js?v=2"></script>
 </body>
 </html>

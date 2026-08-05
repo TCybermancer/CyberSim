@@ -34,6 +34,8 @@ Agents on the in-band range network reach this API only via their OOB NIC
   POST /auth/logout            clears the session cookie
   GET  /auth/me                who's logged in and their role (for the UI to hide/disable
                                 mutating controls for viewer accounts)
+  POST /auth/change-password   self-service password change for whoever's logged in (any
+                                role) -- the dashboard's Settings -> Security tab
   POST /users                  create a dashboard account (admin only)
   GET  /users                  list dashboard accounts (admin only)
   DELETE /users/{username}     remove a dashboard account (admin only)
@@ -89,14 +91,20 @@ AGENT_INSTALLER_NAME = "cybersim-agent-setup.exe"
 app = FastAPI(title="cybersim-orchestrator")
 
 
+_DEFAULT_ADMIN_PASSWORD = "admin"
+
+
 def _ensure_admin_user():
     """Bootstraps the built-in 'admin' account from CYBERSIM_ADMIN_PASSWORD
     if set (rehashing every startup, so changing the env var and
-    restarting rotates its password); otherwise generates one once --
-    reusing the already-stored hash on later startups -- and prints the
-    plaintext a single time so a fresh install isn't silently wide open
-    but also doesn't force every local dev run to set an env var first.
-    Additional accounts (including additional admins) are created via
+    restarting rotates its password); otherwise defaults it to "admin" once
+    -- reusing whatever's already stored on later startups, so this never
+    overwrites a password an admin has since changed via the dashboard's
+    Settings -> Security tab (POST /auth/change-password) -- so a fresh
+    install can log in immediately without hunting through startup logs
+    for a generated string. A loud one-time warning is printed instead,
+    since a known default credential is only safe until someone changes
+    it. Additional accounts (including additional admins) are created via
     POST /users once you can log in with this one."""
     env_password = os.environ.get("CYBERSIM_ADMIN_PASSWORD")
     if env_password:
@@ -105,18 +113,18 @@ def _ensure_admin_user():
         return
 
     if db.get_user("admin") is not None:
-        return  # already provisioned by a previous startup
+        return  # already provisioned by a previous startup (password may have since been changed)
 
-    generated = auth.new_token()
-    password_hash, salt = auth.hash_password(generated)
+    password_hash, salt = auth.hash_password(_DEFAULT_ADMIN_PASSWORD)
     db.upsert_user("admin", password_hash, salt, "admin", datetime.utcnow().isoformat())
     print(
         "\n"
         "==================================================================\n"
-        "No CYBERSIM_ADMIN_PASSWORD set -- generated a dashboard password\n"
-        "for the 'admin' account:\n"
-        f"    {generated}\n"
-        "This is shown once. Set CYBERSIM_ADMIN_PASSWORD to pin it instead.\n"
+        "No CYBERSIM_ADMIN_PASSWORD set -- created the 'admin' dashboard\n"
+        f"account with the default password \"{_DEFAULT_ADMIN_PASSWORD}\".\n"
+        "Log in and change it under Settings -> Security as soon as\n"
+        "possible, or set CYBERSIM_ADMIN_PASSWORD before first startup to\n"
+        "pin a different one instead.\n"
         "==================================================================\n"
     )
 
@@ -231,6 +239,28 @@ def whoami(request: Request):
     schedules, download an install bundle) for viewer accounts instead
     of just letting those actions 403 with no explanation."""
     return request.state.user
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+@app.post("/auth/change-password")
+def change_password(req: ChangePasswordRequest, request: Request):
+    """Lets the currently-logged-in user (any role -- this is self-service,
+    not admin-only) change their own password. Requires the current
+    password so a hijacked, still-open dashboard session can't be used to
+    lock the real owner out. This is what the dashboard's Settings ->
+    Security tab calls, and is the intended way to change the default
+    'admin' password after a fresh install."""
+    username = request.state.user["username"]
+    user = db.get_user(username)
+    if not user or not auth.verify_password(req.current_password, user["password_hash"], user["salt"]):
+        raise HTTPException(401, "current password is incorrect")
+    password_hash, salt = auth.hash_password(req.new_password)
+    db.upsert_user(username, password_hash, salt, user["role"], user["created_at"])
+    return {"status": "ok"}
 
 
 class UserCreateRequest(BaseModel):
