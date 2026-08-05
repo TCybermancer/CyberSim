@@ -1,0 +1,64 @@
+# Vantage Corp / Human Resources. should_alert: bulk access to employee
+# medical-leave records -- a PII/medical-adjacent exfil signature.
+
+persona: Benefits Administrator
+org: Vantage Corp
+department: Human Resources
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://benefits-enrollment-system.vantage.local
+      - http://hris-portal.vantage.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: all-staff-puppet@vantage.local
+      template: generic
+      content_brief: >
+        Write as the Benefits Administrator, reminding staff that open enrollment closes at the end of the month, with a link to the enrollment portal. Friendly, brief, HR tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: benefits_enrollment_summary.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\vantage-fileserver01\\hr"
+      ops: [browse, copy_file]
+      file: benefits_plan_reference_guide.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\vantage-fileserver01\\hr"
+      ops: [browse, copy_file]
+      file: employee_medical_leave_records.pdf
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

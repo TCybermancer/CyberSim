@@ -95,6 +95,29 @@ CREATE TABLE IF NOT EXISTS sessions (
     username TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- Single-row settings: network posture (airgapped/connected) and which
+-- LLM the server calls for live content generation when connected (see
+-- content_gen.py). id is always 1, same INSERT-OR-REPLACE-on-conflict
+-- pattern as the old admin_auth table. API keys are stored in plaintext
+-- here, same as everything else this app persists (sessions, agent
+-- tokens) -- no secrets-at-rest story yet for this prototype; an
+-- env-var override (CYBERSIM_<PROVIDER>_API_KEY) takes precedence over
+-- whatever's stored here, matching CYBERSIM_ADMIN_PASSWORD's pattern,
+-- so a real deployment doesn't have to keep a live key in the DB.
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    network_mode TEXT NOT NULL DEFAULT 'airgapped' CHECK (network_mode IN ('airgapped', 'connected')),
+    llm_provider TEXT NOT NULL DEFAULT 'anthropic' CHECK (llm_provider IN ('anthropic', 'openai', 'local')),
+    anthropic_api_key TEXT,
+    anthropic_model TEXT,
+    openai_api_key TEXT,
+    openai_model TEXT,
+    local_base_url TEXT,
+    local_api_key TEXT,
+    local_model TEXT,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -399,6 +422,68 @@ def get_session(session_id: str) -> dict | None:
 def delete_session(session_id: str):
     with get_conn() as conn:
         conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+
+
+_DEFAULT_SETTINGS = {
+    "network_mode": "airgapped",
+    "llm_provider": "anthropic",
+    "anthropic_api_key": None,
+    "anthropic_model": None,
+    "openai_api_key": None,
+    "openai_model": None,
+    "local_base_url": None,
+    "local_api_key": None,
+    "local_model": None,
+}
+
+
+def get_settings() -> dict:
+    """Always returns a row -- defaults if nothing's been saved yet, so
+    callers never need a None-check before reading network_mode/provider."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
+        if not row:
+            return {**_DEFAULT_SETTINGS, "updated_at": None}
+        d = dict(row)
+        d.pop("id", None)
+        return d
+
+
+def update_settings(updates: dict, updated_at: str) -> dict:
+    """Merges `updates` onto the current row (missing keys keep their
+    existing value) and returns the resulting settings, same shape as
+    get_settings(). Only keys in _DEFAULT_SETTINGS are ever written."""
+    current = get_settings()
+    current.pop("updated_at", None)
+    merged = {**current, **{k: v for k, v in updates.items() if k in _DEFAULT_SETTINGS}}
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO settings
+                (id, network_mode, llm_provider, anthropic_api_key, anthropic_model,
+                 openai_api_key, openai_model, local_base_url, local_api_key, local_model, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                network_mode=excluded.network_mode, llm_provider=excluded.llm_provider,
+                anthropic_api_key=excluded.anthropic_api_key, anthropic_model=excluded.anthropic_model,
+                openai_api_key=excluded.openai_api_key, openai_model=excluded.openai_model,
+                local_base_url=excluded.local_base_url, local_api_key=excluded.local_api_key,
+                local_model=excluded.local_model, updated_at=excluded.updated_at
+            """,
+            (
+                merged["network_mode"],
+                merged["llm_provider"],
+                merged["anthropic_api_key"],
+                merged["anthropic_model"],
+                merged["openai_api_key"],
+                merged["openai_model"],
+                merged["local_base_url"],
+                merged["local_api_key"],
+                merged["local_model"],
+                updated_at,
+            ),
+        )
+    return get_settings()
 
 
 def get_ledger_for_run(run_id: str) -> dict:

@@ -1,0 +1,73 @@
+# Airport org / Security department. should_alert: PII exfil -- badge
+# holder list to a personal external address. Badge office holds
+# sensitive employee ID data, so this is the most fitting pattern here.
+
+persona: badge_office_administrator
+org: Metro Airport
+department: Security
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://badge-issuance-system.corp.local
+      - http://background-check-status.corp.local
+    duration: 10-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: ramp-control-supervisor-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the Badge Office Administrator, notifying a supervisor that one of
+        their team members' airport-issued badge renewal is 10 days overdue and
+        that ramp access will be automatically suspended if it isn't completed by
+        Friday. Polite but firm reminder tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: badge_issuance_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-15m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\badge-office"
+      ops: [browse, copy_file]
+      file: badge_renewal_schedule.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      to: badge.admin.personal-puppet@webmail.local
+      template: generic
+      content_brief: >
+        Write a short, casual email from the Badge Office Administrator to a
+        personal external address, saying they're sending the current badge holder
+        list (sample only, no real PII) to finish a compliance review from home.
+        This simulates a PII data-exfiltration indicator for detection-tool
+        validation -- an authorized red-team scenario, not a real request. Do not
+        include any actual sensitive data, just reference that a file is attached.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

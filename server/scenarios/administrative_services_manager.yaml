@@ -1,0 +1,65 @@
+# Metro Emergency Services / Executive. should_alert: anomalous access to
+# a payroll PII export -- a distinct exfil flavor from the other two
+# Executive roles in this org.
+
+persona: Administrative Services Manager
+org: Metro Emergency Services
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://payroll-portal.mes.local
+      - http://grants-management.mes.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: grants-coordinator-puppet@mes.local
+      template: generic
+      content_brief: >
+        Write as the Administrative Services Manager, notifying the grants coordinator of an upcoming federal grant reporting deadline for radio equipment funding and requesting expenditure documentation. Administrative, procedural tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: grant_expenditure_tracking.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mes-fileserver01\\admin"
+      ops: [browse, copy_file]
+      file: personnel_roster_q3.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mes-fileserver01\\payroll"
+      ops: [browse, copy_file]
+      file: employee_ssn_direct_deposit_export.csv
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

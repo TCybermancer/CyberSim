@@ -5,11 +5,13 @@ server/conftest.py's autouse isolated_db fixture."""
 import io
 import zipfile
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+import content_gen
 import db
 from conftest import TEST_ADMIN_PASSWORD
 
@@ -376,3 +378,169 @@ def test_deleted_users_session_stops_working(client, viewer_client):
     assert viewer_client.get("/runs").status_code == 200
     client.delete("/users/viewer1")
     assert viewer_client.get("/runs").status_code == 401
+
+
+# ---- settings -------------------------------------------------------------
+
+
+def test_default_settings_are_airgapped(client):
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["network_mode"] == "airgapped"
+    assert body["llm_provider"] == "anthropic"
+    assert body["anthropic_key_set"] is False
+
+
+def test_viewer_cannot_read_or_write_settings(viewer_client):
+    assert viewer_client.get("/settings").status_code == 403
+    assert viewer_client.put("/settings", json={"network_mode": "connected"}).status_code == 403
+
+
+def test_settings_update_never_echoes_key_value(client):
+    resp = client.put("/settings", json={"anthropic_api_key": "sk-ant-super-secret"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "anthropic_api_key" not in body
+    assert "sk-ant-super-secret" not in resp.text
+    assert body["anthropic_key_set"] is True
+
+
+def test_settings_partial_update_preserves_other_fields(client):
+    client.put(
+        "/settings",
+        json={"network_mode": "connected", "llm_provider": "openai", "openai_api_key": "sk-openai-test"},
+    )
+    # A later update that only touches network_mode shouldn't clear the
+    # provider/key set above.
+    resp = client.put("/settings", json={"network_mode": "airgapped"})
+    body = resp.json()
+    assert body["network_mode"] == "airgapped"
+    assert body["llm_provider"] == "openai"
+    assert body["openai_key_set"] is True
+
+
+def test_settings_rejects_unknown_network_mode(client):
+    resp = client.put("/settings", json={"network_mode": "sort-of-connected"})
+    assert resp.status_code == 422
+
+
+def test_settings_rejects_unknown_provider(client):
+    resp = client.put("/settings", json={"llm_provider": "carrier-pigeon"})
+    assert resp.status_code == 422
+
+
+# ---- live content generation ------------------------------------------
+
+
+CONTENT_BRIEF_SCENARIO_YAML = """
+persona: airport_director
+org: Metro Airport
+department: Executive
+schedule:
+  - action: email_send
+    delay_before: 0-0s
+    params:
+      to: cfo-puppet@corp.local
+      template: generic
+      content_brief: "Push back on the Q3 budget, citing insufficient funds."
+  - action: web_browse
+    delay_before: 0-0s
+    targets: ["http://intranet.corp.local"]
+"""
+
+
+@pytest.fixture
+def content_brief_scenario(tmp_path, monkeypatch):
+    (tmp_path / "airport_director.yaml").write_text(CONTENT_BRIEF_SCENARIO_YAML)
+    monkeypatch.setattr(app_module, "SCENARIOS_DIR", tmp_path)
+
+
+def _email_params(ledger):
+    entry = next(e for e in ledger.values() if e["spec"]["action_type"] == "email_send")
+    return entry["spec"]["params"]
+
+
+@patch("app.content_gen.generate_content")
+def test_seeded_run_never_calls_content_gen(mock_generate, client, content_brief_scenario):
+    resp = client.post(
+        "/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 1}
+    )
+    assert resp.status_code == 200
+    mock_generate.assert_not_called()
+
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _email_params(ledger)
+    assert "subject" not in params
+    assert params["template"] == "generic"
+
+
+@patch("app.content_gen.generate_content")
+def test_unseeded_airgapped_run_never_calls_content_gen(mock_generate, client, content_brief_scenario):
+    # network_mode defaults to "airgapped" -- no explicit /settings call needed.
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"]})
+    assert resp.status_code == 200
+    mock_generate.assert_not_called()
+
+
+@patch("app.content_gen.generate_content")
+def test_unseeded_connected_run_uses_generated_content(mock_generate, client, content_brief_scenario):
+    mock_generate.return_value = "Subject: Q3 budget concerns\n\nWe can't fund this. -Jordan"
+    client.put("/settings", json={"network_mode": "connected", "anthropic_api_key": "sk-test"})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"]})
+    assert resp.status_code == 200
+    mock_generate.assert_called_once()
+
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _email_params(ledger)
+    assert params["subject"] == "Q3 budget concerns"
+    assert params["body"] == "We can't fund this. -Jordan"
+
+    # The prompt sent to the LLM carries org/department/persona context.
+    call_args = mock_generate.call_args
+    system_prompt = call_args.args[1]
+    assert "airport_director" in system_prompt
+    assert "Executive" in system_prompt
+    assert "Metro Airport" in system_prompt
+    assert call_args.args[2] == "Push back on the Q3 budget, citing insufficient funds."
+
+
+@patch("app.content_gen.generate_content")
+def test_content_gen_failure_falls_back_to_template(mock_generate, client, content_brief_scenario):
+    mock_generate.side_effect = content_gen.ContentGenError("no API key configured")
+    client.put("/settings", json={"network_mode": "connected"})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"]})
+    assert resp.status_code == 200  # launch still succeeds
+
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _email_params(ledger)
+    assert "subject" not in params
+    assert params["template"] == "generic"
+
+
+@patch("app.content_gen.generate_content")
+def test_malformed_llm_response_falls_back_to_template(mock_generate, client, content_brief_scenario):
+    mock_generate.return_value = "not in the expected Subject: format at all"
+    client.put("/settings", json={"network_mode": "connected"})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"]})
+    assert resp.status_code == 200
+
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _email_params(ledger)
+    assert "subject" not in params
+
+
+@patch("app.content_gen.generate_content")
+def test_steps_without_content_brief_are_skipped(mock_generate, client, content_brief_scenario):
+    """The web_browse step in the fixture scenario has no content_brief
+    and isn't email_send anyway -- only the one eligible step should
+    trigger a call."""
+    mock_generate.return_value = "Subject: hi\n\nbody"
+    client.put("/settings", json={"network_mode": "connected"})
+
+    client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"]})
+
+    assert mock_generate.call_count == 1

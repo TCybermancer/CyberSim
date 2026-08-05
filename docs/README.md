@@ -567,6 +567,44 @@ docstring for the full reasoning):
   own TODOs originally called for -- see "Still stubbed" above for that
   tradeoff.
 
+### Live content generation & organization scenarios
+
+Scenarios can carry two kinds of extra metadata beyond `persona`:
+
+- **`org` / `department`** (top-level, e.g. `org: Metro Airport`,
+  `department: Executive`) -- purely descriptive grouping metadata for
+  the dashboard; `scenario_engine.py` never reads them, so a scenario
+  without them behaves exactly as before.
+- **`content_brief`** (per `email_send` step, inside that step's
+  `params:`) -- a short instruction ("push back on the Q3 budget,
+  citing insufficient funds") that, when the server is in "connected"
+  mode (see `http://<server>/ui/settings.html`), gets sent to an LLM
+  (Anthropic / OpenAI / a local OpenAI-compatible endpoint -- your
+  choice, admin only) to write the actual subject/body live at
+  run-launch time. A step without `content_brief` is untouched; a step
+  *with* one still needs a `template:` set too, since that's the
+  fallback used whenever live generation doesn't apply or fails:
+  - An explicit `seed` was passed (replay mode) -- resolve()'s
+    byte-identical-given-the-same-seed guarantee always wins; live
+    generation only ever runs for a genuinely fresh, unseeded launch.
+  - `network_mode` is "airgapped" (the default) -- no outbound call is
+    even attempted.
+  - The LLM call fails, times out, or returns something that doesn't
+    parse as `Subject: ...\n\n<body>` -- logged, then the launch
+    proceeds with the static template rather than failing outright.
+
+  Deliberately scoped to `email_send` only: unlike free-form email
+  prose, `web_browse` targets and `smb_access` paths have to correspond
+  to things that actually exist in the range (a real reachable URL, a
+  real file on a real share) -- an LLM can't safely invent those at run
+  time. Realism for those two comes from writing good, role-appropriate
+  static content into the scenario directly, not live generation.
+
+  See `server/content_gen.py` for the provider abstraction and
+  `server/app.py`'s `_apply_live_content` for exactly where this plugs
+  into `POST /runs` (and the recurring-schedule scheduler loop, which
+  shares the same `_launch_run` core).
+
 The installer requires admin (creates a Scheduled Task, not a Windows
 service -- a puppet host is meant to look like a real logged-in user
 working, which is also what a real user's session actually *is*, so the

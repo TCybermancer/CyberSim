@@ -1,0 +1,64 @@
+# Metro Emergency Services / Fire. should_alert: anomalous access to
+# HR medical exam records -- a PII-adjacent misuse pattern.
+
+persona: Fire Captain
+org: Metro Emergency Services
+department: Fire
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://incident-reporting-system.mes.local
+      - http://apparatus-status-board.mes.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: fire-battalion-chief-puppet@mes.local
+      template: generic
+      content_brief: >
+        Write as a Fire Captain, sending an after-action summary from a structure fire response, noting a minor equipment failure on Engine 3 requiring maintenance. Professional, brief tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_writer
+      file: incident_after_action_report.docx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mes-fileserver01\\fire"
+      ops: [browse, copy_file]
+      file: company_training_records.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mes-fileserver01\\hr"
+      ops: [browse, copy_file]
+      file: firefighter_medical_exam_records.pdf
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

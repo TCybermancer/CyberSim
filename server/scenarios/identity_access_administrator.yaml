@@ -1,0 +1,70 @@
+# Airport org / IT department (covers Active Directory). should_alert:
+# accessing the Executive share -- this role technically CAN reach
+# almost anything, so the red flag here is context/appropriateness
+# rather than raw permission, a distinct flavor of misuse from the
+# other IT roles' more clear-cut out-of-scope-share patterns.
+
+persona: identity_access_administrator
+org: Metro Airport
+department: IT
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://ad-management-console.corp.local
+      - http://identity-governance.corp.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: ops-department-heads-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the Identity & Access Administrator, informing department heads
+        that this quarter's access review identified several stale accounts
+        belonging to former contractors that will be disabled in five business days
+        unless a business justification is provided. Formal, procedural tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: quarterly_access_review.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 15-25m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\it-admin"
+      ops: [browse, copy_file]
+      file: ad_group_membership_export.csv
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\fileserver01\\executive"
+      ops: [browse, copy_file]
+      file: board_briefing_q3.pptx
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

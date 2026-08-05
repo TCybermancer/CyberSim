@@ -36,6 +36,9 @@ Agents on the in-band range network reach this API only via their OOB NIC
   POST /users                  create a dashboard account (admin only)
   GET  /users                  list dashboard accounts (admin only)
   DELETE /users/{username}     remove a dashboard account (admin only)
+  GET  /settings                network posture + LLM provider config (admin only, API
+                                keys masked; see content_gen.py)
+  PUT  /settings                update network posture / LLM provider config (admin only)
 
 Auth has two independent layers (see auth.py's module docstring for the
 tradeoffs each one made):
@@ -71,6 +74,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import auth
+import content_gen
 import db
 import scoring_core
 from models import ActionSpec, ActionType, AgentRegistration, CompletionRecord, IntentRecord, PollResponse
@@ -262,6 +266,56 @@ def remove_user(username: str, request: Request):
     db.delete_user(username)
 
 
+def _mask_settings(s: dict) -> dict:
+    """Never echoes a stored API key back to the browser -- only whether
+    one is set, so the settings page can show "configured" vs. a blank
+    field without a full round-trip ever exposing the secret again."""
+    return {
+        "network_mode": s["network_mode"],
+        "llm_provider": s["llm_provider"],
+        "anthropic_model": s.get("anthropic_model"),
+        "anthropic_key_set": bool(s.get("anthropic_api_key")),
+        "openai_model": s.get("openai_model"),
+        "openai_key_set": bool(s.get("openai_api_key")),
+        "local_base_url": s.get("local_base_url"),
+        "local_model": s.get("local_model"),
+        "local_key_set": bool(s.get("local_api_key")),
+        "updated_at": s.get("updated_at"),
+    }
+
+
+@app.get("/settings", dependencies=[Depends(require_admin)])
+def get_settings():
+    """Network posture (airgapped/connected) and LLM provider config for
+    live content generation -- see content_gen.py. Admin only: this is
+    the one place a stored API key's *presence* (never its value) is
+    exposed via the API."""
+    return _mask_settings(db.get_settings())
+
+
+class SettingsUpdateRequest(BaseModel):
+    network_mode: str | None = Field(default=None, pattern=r"^(airgapped|connected)$")
+    llm_provider: str | None = Field(default=None, pattern=r"^(anthropic|openai|local)$")
+    anthropic_api_key: str | None = None
+    anthropic_model: str | None = None
+    openai_api_key: str | None = None
+    openai_model: str | None = None
+    local_base_url: str | None = None
+    local_api_key: str | None = None
+    local_model: str | None = None
+
+
+@app.put("/settings", dependencies=[Depends(require_admin)])
+def update_settings(req: SettingsUpdateRequest):
+    """Partial update -- omitted fields keep their current value; an API
+    key field sent as "" clears it. Only fields actually present in the
+    request body are touched (see exclude_unset), so re-saving the form
+    without retyping a key never wipes it out."""
+    updates = req.model_dump(exclude_unset=True)
+    updated = db.update_settings(updates, datetime.utcnow().isoformat())
+    return _mask_settings(updated)
+
+
 def _check_agent_token(host: str, authorization: str | None):
     """Called inline at the top of each agent-facing route (register,
     poll, ledger/intent, ledger/completion) rather than as a shared
@@ -333,7 +387,70 @@ class HostsBusyError(Exception):
         self.busy = busy
 
 
-def _launch_run(scenario_name: str, hosts: list[str], start_time: datetime, seed: int | None):
+_EMAIL_SYSTEM_PROMPT_TEMPLATE = """You write realistic corporate emails for an authorized cybersecurity \
+detection-tool validation exercise (a controlled lab -- there is no real person on the other end).
+
+You are writing as: {persona}{department_clause}{org_clause}
+
+Write ONLY the email itself, nothing else -- no commentary, no explanation, no markdown. Format your \
+entire response EXACTLY as:
+Subject: <subject line>
+
+<body text>
+
+Keep the body realistic in length and tone for a real workplace email (a few short paragraphs at most). \
+Do not include a signature block beyond a first-name sign-off if natural."""
+
+
+def _build_email_prompt(persona: str, org: str | None, department: str | None) -> str:
+    department_clause = f" in the {department} department" if department else ""
+    org_clause = f" at {org}" if org else ""
+    return _EMAIL_SYSTEM_PROMPT_TEMPLATE.format(
+        persona=persona, department_clause=department_clause, org_clause=org_clause
+    )
+
+
+def _parse_generated_email(raw: str) -> tuple[str, str]:
+    subject_line, sep, body = raw.strip().partition("\n\n")
+    if not subject_line.startswith("Subject:") or not sep:
+        raise content_gen.ContentGenError(
+            f"LLM response didn't match the expected 'Subject: ...' format: {raw[:200]!r}"
+        )
+    return subject_line[len("Subject:") :].strip(), body.strip()
+
+
+async def _apply_live_content(specs: list[ActionSpec], scenario: dict, settings: dict) -> None:
+    """Mutates eligible email_send specs' params in place with live-
+    generated subject/body, one LLM call per eligible step. Only called
+    for genuinely fresh (unseeded) launches while network_mode is
+    "connected" -- see _launch_run. A step opts in by having
+    params.content_brief set in its scenario YAML; anything else (no
+    brief, wrong action type, generation failure) is left exactly as
+    resolve() produced it, so email_send's existing params.template
+    fallback (see agent/actions/email_send.py) always has something
+    sane to render."""
+    persona = scenario.get("persona", "")
+    org = scenario.get("org")
+    department = scenario.get("department")
+    system_prompt = _build_email_prompt(persona, org, department)
+
+    for spec in specs:
+        if spec.action_type != ActionType.EMAIL_SEND:
+            continue
+        brief = spec.params.get("content_brief")
+        if not brief:
+            continue
+        try:
+            raw = await asyncio.to_thread(content_gen.generate_content, settings, system_prompt, brief)
+            subject, body = _parse_generated_email(raw)
+        except content_gen.ContentGenError as e:
+            print(f"[content_gen] falling back to static template for action {spec.action_id}: {e}")
+            continue
+        spec.params["subject"] = subject
+        spec.params["body"] = body
+
+
+async def _launch_run(scenario_name: str, hosts: list[str], start_time: datetime, seed: int | None):
     """Core of starting a run -- shared by POST /runs and the recurring-
     schedule background loop below, so there's exactly one place that
     decides how a scenario turns into persisted ActionSpecs. Raises plain
@@ -353,16 +470,30 @@ def _launch_run(scenario_name: str, hosts: list[str], start_time: datetime, seed
         raise HostsBusyError(busy)
 
     run_id, seed_used, specs = resolve(scenario, hosts, start_time, seed)
+
+    # Live content generation only for genuinely fresh launches: an
+    # explicit seed means the caller wants an exact replay, and
+    # resolve()'s own byte-identical-given-the-same-seed guarantee would
+    # otherwise be silently broken by content an LLM can't reproduce on
+    # request. network_mode gates it the other way -- airgapped
+    # deployments never make this call at all, not even to check.
+    if seed is None:
+        settings = db.get_settings()
+        if settings["network_mode"] == "connected":
+            await _apply_live_content(specs, scenario, settings)
+
     db.save_run(run_id, scenario_name, seed_used, start_time.isoformat())
     db.save_action_specs([s.model_dump(mode="json") for s in specs])
     return run_id, seed_used, len(specs)
 
 
 @app.post("/runs", dependencies=[Depends(require_admin)])
-def start_run(req: RunRequest):
+async def start_run(req: RunRequest):
     start_time = req.start_time or datetime.utcnow()
     try:
-        run_id, seed_used, action_count = _launch_run(req.scenario_name, req.hosts, start_time, req.seed)
+        run_id, seed_used, action_count = await _launch_run(
+            req.scenario_name, req.hosts, start_time, req.seed
+        )
     except ScenarioNotFoundError:
         raise HTTPException(404, f"scenario '{req.scenario_name}' not found")
     except HostsBusyError as e:
@@ -482,7 +613,7 @@ async def _scheduler_loop():
             now = datetime.utcnow()
             for sched in db.due_schedules(now.isoformat()):
                 try:
-                    run_id, _, _ = _launch_run(
+                    run_id, _, _ = await _launch_run(
                         sched["scenario_name"], sched["hosts"], now, sched["seed"]
                     )
                 except HostsBusyError:
@@ -543,6 +674,12 @@ class ScenarioStepRequest(BaseModel):
 class ScenarioCreateRequest(BaseModel):
     name: str = Field(pattern=_SCENARIO_NAME_PATTERN)
     persona: str
+    # Purely descriptive metadata for grouping scenarios under an
+    # organization/department in the dashboard (see docs/README.md) --
+    # scenario_engine.py never reads these, so leaving them blank changes
+    # nothing about how a run resolves or executes.
+    org: str | None = None
+    department: str | None = None
     schedule: list[ScenarioStepRequest] = Field(min_length=1)
 
 
@@ -563,6 +700,8 @@ def create_scenario(req: ScenarioCreateRequest, overwrite: bool = Query(default=
 
     doc = {
         "persona": req.persona,
+        **({"org": req.org} if req.org else {}),
+        **({"department": req.department} if req.department else {}),
         "schedule": [
             {
                 "action": step.action.value,

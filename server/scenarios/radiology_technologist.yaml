@@ -1,0 +1,64 @@
+# Metro Regional Hospital / Diagnostics. should_alert: bulk export of
+# imaging studies -- a PII-heavy bulk exfil signature.
+
+persona: Radiology Technologist
+org: Metro Regional Hospital
+department: Diagnostics
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://pacs-portal.mrh.local
+      - http://radiology-scheduling-system.mrh.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: radiology-department-puppet@mrh.local
+      template: generic
+      content_brief: >
+        Write as a Radiology Technologist, reporting that one of the CT suite workstations is displaying intermittent image loading errors and requesting an IT ticket. Brief, technical tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: equipment_qc_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mrh-fileserver01\\radiology"
+      ops: [browse, copy_file]
+      file: imaging_protocol_reference.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mrh-fileserver01\\clinical"
+      ops: [browse, copy_file]
+      file: patient_imaging_study_export_bulk.zip
+    duration: 4-8m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

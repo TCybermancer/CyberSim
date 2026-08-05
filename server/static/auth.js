@@ -35,14 +35,29 @@ function getCurrentUser() {
   return _currentUserPromise;
 }
 
+const NAV_LINK_IDS = ["nav-scenario-builder", "nav-install", "nav-users", "nav-settings"];
+
+// Every admin-only page (build scenario, install, users, settings) is
+// linked from the sidebar on *every* page, not just the dashboard --
+// centralized here so hiding those links for viewer accounts is one
+// implementation instead of one per page.
+function applyNavRoleGating(role) {
+  const isAdmin = role === "admin";
+  NAV_LINK_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isAdmin ? "" : "none";
+  });
+}
+
 async function setupWhoami() {
-  const pill = document.getElementById("whoami-pill");
-  if (!pill) return null;
+  let user;
   try {
-    const user = await getCurrentUser();
-    pill.textContent = `${user.username} (${user.role})`;
-    return user;
+    user = await getCurrentUser();
   } catch {
     return null; // authedFetch already redirected to login on 401
   }
+  applyNavRoleGating(user.role);
+  const pill = document.getElementById("whoami-pill");
+  if (pill) pill.textContent = `${user.username} (${user.role})`;
+  return user;
 }

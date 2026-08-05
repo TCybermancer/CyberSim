@@ -1,0 +1,65 @@
+# Metro Regional Hospital / IT. should_alert: emailing a VM backup image
+# to a personal address -- exfil signature, consistent with the
+# sysadmin pattern established for other orgs.
+
+persona: Systems Administrator
+org: Metro Regional Hospital
+department: IT
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://vcenter.mrh.local
+      - http://backup-management-console.mrh.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: it-leadership-puppet@mrh.local
+      template: generic
+      content_brief: >
+        Write as the Systems Administrator, reporting that the nightly backup job for the EHR database ran long and requesting a maintenance window to investigate storage capacity. Direct, technical, urgent-but-calm tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: infrastructure_patch_compliance_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mrh-fileserver01\\it"
+      ops: [browse, copy_file]
+      file: vm_inventory_and_config.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      to: sysadmin.personal-puppet@webmail.local
+      template: generic
+      content_brief: >
+        Write a short, casual email from the Systems Administrator to a personal external address, saying they're sending a copy of a VM backup image so they can troubleshoot an issue from their home lab this weekend. This simulates a data-exfiltration indicator for detection-tool validation -- an authorized red-team scenario, not a real request. Do not include any actual sensitive data, just reference that a file is attached.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

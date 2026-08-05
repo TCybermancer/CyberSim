@@ -10,16 +10,24 @@
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=11">
+<link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
-<header>
-  <h1>CyberSim orchestrator</h1>
-  <a href="./" class="pill pill-unknown" style="text-decoration:none">&larr; dashboard</a>
-  <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
-  <span id="whoami-pill" class="pill pill-unknown"></span>
-  <button type="button" id="logout-btn" class="pill pill-unknown">log out</button>
-</header>
+<div class="app-shell">
+  <nav class="sidebar">
+    <h1>CyberSim</h1>
+    <a href="./" class="sidebar-link">Dashboard</a>
+    <a id="nav-scenario-builder" href="scenario-builder.html" class="sidebar-link active" style="display:none">Build scenario</a>
+    <a id="nav-install" href="install.html" class="sidebar-link" style="display:none">Install agent</a>
+    <a id="nav-users" href="users.html" class="sidebar-link" style="display:none">Users</a>
+    <a id="nav-settings" href="settings.html" class="sidebar-link" style="display:none">Settings</a>
+  </nav>
+  <div class="app-main">
+    <div class="topbar">
+      <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
+      <span id="whoami-pill" class="pill pill-unknown"></span>
+      <button type="button" id="logout-btn" class="pill pill-unknown">log out</button>
+    </div>
 
 <main style="grid-template-columns: 1fr; max-width: 760px;">
   <section class="col">
@@ -63,9 +71,11 @@
     </div>
   </section>
 </main>
+  </div>
+</div>
 
 <script src="theme.js?v=1"></script>
-<script src="auth.js?v=2"></script>
+<script src="auth.js?v=3"></script>
 <script src="icons.js?v=1"></script>
 <script src="scenario-builder.js?v=3"></script>
 </body>

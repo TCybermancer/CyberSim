@@ -1,0 +1,66 @@
+# Metro Regional Hospital / Administration (Health Information
+# Management). should_alert: a full EHR database export -- the most
+# severe HIM-plausible insider-threat pattern in this org, large-scale
+# PII bulk-copy.
+
+persona: Medical Records Administrator
+org: Metro Regional Hospital
+department: Administration
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://ehr-portal.mrh.local
+      - http://release-of-information-portal.mrh.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: legal-counsel-puppet@mrh.local
+      template: generic
+      content_brief: >
+        Write as the Medical Records Administrator, flagging a subpoena for patient records that needs legal review before release, per policy. Procedural, careful tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: release_of_information_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mrh-fileserver01\\administration"
+      ops: [browse, copy_file]
+      file: records_retention_policy.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mrh-fileserver01\\clinical"
+      ops: [browse, copy_file]
+      file: complete_ehr_database_export.zip
+    duration: 5-10m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

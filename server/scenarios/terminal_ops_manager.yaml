@@ -1,0 +1,67 @@
+# Airport org / Airport Operations department. should_alert: bulk copy
+# of passenger flow analytics off the terminal-ops share (data staging).
+
+persona: terminal_ops_manager
+org: Metro Airport
+department: Airport Operations
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://fids-admin.corp.local
+      - http://facilities-portal.corp.local
+    duration: 10-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-15m
+    params:
+      to: facilities-maintenance-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the Terminal Operations Manager, escalating that the escalator
+        between the ticketing hall and Concourse B has been out of service for two
+        days, causing passenger flow bottlenecks during peak hours, and requesting
+        an updated repair timeline today. Firm but professional tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-20m
+    params:
+      app: libreoffice_calc
+      file: terminal_passenger_flow_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\terminal-ops"
+      ops: [browse, copy_file]
+      file: concourse_signage_map.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\fileserver01\\terminal-ops"
+      ops: [browse, copy_file]
+      file: passenger_flow_analytics_all_2026.zip
+    duration: 3-6m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

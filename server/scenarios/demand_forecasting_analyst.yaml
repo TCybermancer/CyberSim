@@ -1,0 +1,64 @@
+# Meridian Logistics / Supply Chain. should_alert: bulk export of sales
+# and customer data -- a data-staging/bulk-copy plus PII signature.
+
+persona: Demand Forecasting Analyst
+org: Meridian Logistics
+department: Supply Chain
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://forecasting-analytics-portal.meridianlog.local
+      - http://erp-procurement-portal.meridianlog.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: purchasing-manager-puppet@meridianlog.local
+      template: generic
+      content_brief: >
+        Write as the Demand Forecasting Analyst, sharing updated demand forecasts for next quarter ahead of purchasing's ordering cycle, noting a seasonal spike expected in one product category. Informative, brief tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: demand_forecast_model.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\meridian-fileserver01\\supply-chain"
+      ops: [browse, copy_file]
+      file: historical_demand_data_reference.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\meridian-fileserver01\\supply-chain"
+      ops: [browse, copy_file]
+      file: full_sales_and_customer_data_export.csv
+    duration: 3-6m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

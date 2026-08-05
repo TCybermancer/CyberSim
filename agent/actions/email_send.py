@@ -3,11 +3,23 @@ email_send: send a real email to a puppet mailbox via the range's internal
 mail server.
 
 Real smtplib delivery against the puppet SMTP server, configured under the
-`smtp:` block in config.yaml (host/port/from_addr/credentials). Templates
-live in agent/templates/<name>.txt -- first line `Subject: ...`, blank
-line, then a plain-text body. Both are rendered with stdlib
-`string.Template` ($var syntax) against a context built from the action's
-params plus a couple of fixed fields (to, from_addr, sent_at).
+`smtp:` block in config.yaml (host/port/from_addr/credentials). Two ways
+a message's content gets decided, checked in this order:
+
+  1. params.subject + params.body already set -- the server generated
+     these live (see server/app.py's _apply_live_content /
+     server/content_gen.py) and resolved them into the ActionSpec before
+     ever handing it to this agent. Used as-is, verbatim: NOT run through
+     the $var substitution below, since generated prose can contain a
+     literal "$" (e.g. a dollar figure) that string.Template would
+     otherwise reject as an invalid placeholder.
+  2. Otherwise, params.template names a file under agent/templates/
+     <name>.txt -- first line `Subject: ...`, blank line, then a
+     plain-text body, both rendered with stdlib `string.Template` ($var
+     syntax) against a context built from the action's params plus a
+     couple of fixed fields (to, from_addr, sent_at). This is always
+     available as a fallback (airgapped deployments, or seeded/replayed
+     runs, both skip live generation entirely -- see app.py).
 
 The returned Message-ID is the artifact to cross-check against the mail
 server's own delivery log as the second, independent confirmation of
@@ -56,14 +68,18 @@ def execute(params: dict, config: dict | None = None) -> dict:
     timeout = smtp_cfg.get("timeout_seconds", 10)
 
     to = params["to"]
-    template_name = params.get("template", "generic")
 
-    context = {
-        "to": to,
-        "from_addr": from_addr,
-        "sent_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    subject, body = _render_template(template_name, context)
+    if params.get("subject") and params.get("body"):
+        subject, body = params["subject"], params["body"]
+        template_name = "(generated)"
+    else:
+        template_name = params.get("template", "generic")
+        context = {
+            "to": to,
+            "from_addr": from_addr,
+            "sent_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        subject, body = _render_template(template_name, context)
 
     message_id = make_msgid(domain="cybersim.corp.local")
     msg = EmailMessage()

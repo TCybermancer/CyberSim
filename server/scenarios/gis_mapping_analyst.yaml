@@ -1,0 +1,65 @@
+# Metro Emergency Services / Dispatch. should_alert: emailing a mapping
+# database extract with addresses to a personal address -- a
+# data-exfil signature distinct from the other Dispatch roles.
+
+persona: GIS Mapping Analyst
+org: Metro Emergency Services
+department: Dispatch
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://gis-portal.mes.local
+      - http://address-verification-system.mes.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: cad-dispatcher-puppet@mes.local
+      template: generic
+      content_brief: >
+        Write as a GIS Mapping Analyst, informing dispatch that a new subdivision's addresses have been added to the mapping database and are ready for CAD sync. Technical, brief tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: address_database_update_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mes-fileserver01\\gis"
+      ops: [browse, copy_file]
+      file: jurisdiction_boundary_maps.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      to: analyst.personal-puppet@webmail.local
+      template: generic
+      content_brief: >
+        Write a short, casual email from the GIS Mapping Analyst to a personal external address, saying they're sending a copy of the address database export to troubleshoot a sync issue from their home computer this weekend. This simulates a data-exfiltration indicator for detection-tool validation -- an authorized red-team scenario, not a real request. Do not include any actual sensitive data, just reference that a file is attached.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

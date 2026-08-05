@@ -1,0 +1,78 @@
+# Airport org / Executive department -- first role built for the
+# Airport org pilot (see docs/README.md "Live content generation &
+# organization scenarios"). The two email_send steps below use
+# content_brief to get their subject/body written live by an LLM when
+# the server is in "connected" mode (server/content_gen.py); airgapped
+# deployments (the default) fall back to the `template:` set on each
+# step instead, so this scenario behaves sensibly either way.
+
+persona: airport_director
+org: Metro Airport
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 2-8m
+    targets:
+      - http://intranet.corp.local
+      - http://ops-dashboard.corp.local
+    duration: 5-10m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-15m
+    params:
+      to: cfo-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the Airport Director, pushing back on the CFO's proposed Q3 budget
+        cuts. Explain that the terminal expansion project cannot proceed without the
+        originally approved funding, and request a meeting this week to discuss
+        alternatives before the board review. Professional but firm tone, a few
+        short paragraphs.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-20m
+    params:
+      app: libreoffice_calc
+      file: airport_operating_budget_q3.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-15m
+    params:
+      share: "\\\\fileserver01\\executive"
+      ops: [browse, copy_file]
+      file: board_briefing_q3.pptx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 15-30m
+    should_alert: true
+    params:
+      to: director.personal-puppet@webmail.local
+      template: generic
+      content_brief: >
+        Write a short, casual email from the Airport Director to a personal
+        external address, saying they're forwarding the internal financial
+        planning spreadsheet so they can keep working on it from home this
+        weekend. This simulates a potential data-exfiltration indicator for
+        detection-tool validation -- an authorized red-team scenario, not a
+        real request.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

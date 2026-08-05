@@ -1,0 +1,65 @@
+# Vantage Corp / Executive. should_alert: bulk access to the product
+# source-code archive -- an IP-exfil signature, a new variant for this
+# batch (source code rather than PII/financial data).
+
+persona: Chief Information Officer
+org: Vantage Corp
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://it-governance-portal.vantage.local
+      - http://cloud-cost-management-portal.vantage.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: it-department-heads-puppet@vantage.local
+      template: generic
+      content_brief: >
+        Write as the CIO, outlining priorities for the upcoming cloud migration project and requesting department readiness assessments. Professional, strategic tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: it_capital_budget_plan.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\vantage-fileserver01\\it"
+      ops: [browse, copy_file]
+      file: cloud_migration_project_plan.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\vantage-fileserver01\\engineering"
+      ops: [browse, copy_file]
+      file: product_source_code_archive.zip
+    duration: 4-8m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

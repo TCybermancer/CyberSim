@@ -1,0 +1,76 @@
+# Airport org / IT department (covers Virtual Infrastructure + Backup
+# Systems + Email/messaging admin). should_alert: emailing a VM
+# template/backup image to a personal address -- distinct from the
+# smb_access-based patterns used elsewhere in IT, and a believable one
+# here since backup images can embed credentials and configuration.
+
+persona: systems_administrator
+org: Metro Airport
+department: IT
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://vcenter.corp.local
+      - http://backup-management-console.corp.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: it-leadership-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the Systems Administrator, flagging that last night's backup job
+        for the finance file server failed for the third consecutive night due to
+        insufficient storage, and requesting approval for emergency storage
+        expansion before the next scheduled run. Direct, technical, urgent-but-calm
+        tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: infrastructure_patch_compliance_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\it-systems"
+      ops: [browse, copy_file]
+      file: vm_template_windows_2022.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      to: sysadmin.personal-puppet@webmail.local
+      template: generic
+      content_brief: >
+        Write a short, casual email from the Systems Administrator to a personal
+        external address, saying they're sending a copy of a VM backup image so
+        they can troubleshoot a issue from their home lab this weekend. This
+        simulates a data-exfiltration indicator for detection-tool validation --
+        an authorized red-team scenario, not a real request. Do not include any
+        actual sensitive data, just reference that a file is attached.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

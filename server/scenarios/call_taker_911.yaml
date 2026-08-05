@@ -1,0 +1,65 @@
+# Metro Emergency Services / Dispatch. should_alert: browsing a
+# typosquat-style external domain mixed into routine targets --
+# phishing-adjacent, distinct from the smb-based signatures elsewhere.
+
+persona: 911 Call Taker
+org: Metro Emergency Services
+department: Dispatch
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://cad-dispatch-console.mes.local
+      - http://mapping-gis-portal.mes.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: shift-supervisor-puppet@mes.local
+      template: generic
+      content_brief: >
+        Write as a 911 Call Taker, reporting a malfunctioning headset at their workstation and requesting an IT ticket be opened before the next shift. Brief, routine tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: call_volume_shift_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mes-fileserver01\\dispatch"
+      ops: [browse, copy_file]
+      file: call_taking_procedures_manual.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: web_browse
+    delay_before: 20-40m
+    should_alert: true
+    targets:
+      - http://cad-dispatch-console.mes.local
+      - http://mes-payroll-verify.com
+    duration: 5-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session

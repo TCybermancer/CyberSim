@@ -1,0 +1,75 @@
+# Airport org / Executive department. The should_alert step here is a
+# PII-exfiltration pattern (personnel file to an external address) --
+# HR is the department where that's the most realistic red-team signal,
+# and it's a well-known DLP/detection category in its own right.
+
+persona: hr_manager
+org: Metro Airport
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://benefits-portal.corp.local
+      - http://ats.corp.local
+      - http://intranet.corp.local
+    duration: 10-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-15m
+    params:
+      to: ops-department-heads-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the HR Manager, informing department heads that a hiring freeze is
+        in effect for all non-safety-critical positions through the end of the
+        fiscal year, and that any open requisitions need VP sign-off going forward.
+        Professional, empathetic but clear tone, a few short paragraphs.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: staffing_roster_q3.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\hr"
+      ops: [browse, copy_file]
+      file: open_enrollment_guide_2026.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      to: hr.manager.personal-puppet@webmail.local
+      template: generic
+      content_brief: >
+        Write a short, casual email from the HR Manager to a personal external
+        address, saying they're sending a copy of an employee's personnel file
+        (name: sample only, no real PII) so they can finish a review from home this
+        weekend. This simulates a PII data-exfiltration indicator for detection-tool
+        validation -- an authorized red-team scenario, not a real request. Do not
+        include any actual sensitive data, just reference that a file is attached.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

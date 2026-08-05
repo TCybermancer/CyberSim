@@ -1,0 +1,67 @@
+# Airport org / Security department. should_alert: bulk download of
+# checkpoint screening logs (data staging).
+
+persona: tsa_coordination_liaison
+org: Metro Airport
+department: Security
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://tsa-coordination-portal.corp.local
+      - http://checkpoint-wait-times.corp.local
+    duration: 10-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: tsa-fsd-office-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the TSA Coordination Liaison, requesting additional checkpoint
+        staffing be scheduled for the upcoming holiday travel period based on
+        projected passenger volume, and offering to share the airport's forecast
+        data to support the request. Professional, collaborative tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: checkpoint_throughput_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\security-ops"
+      ops: [browse, copy_file]
+      file: checkpoint_staffing_plan.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\fileserver01\\security-ops"
+      ops: [browse, copy_file]
+      file: checkpoint_screening_logs_all_2026.zip
+    duration: 3-6m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

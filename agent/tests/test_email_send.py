@@ -84,3 +84,59 @@ def test_execute_skips_login_without_credentials():
         execute({"to": "x@corp.local"}, {"smtp": {}})
 
     mock_smtp.login.assert_not_called()
+
+
+def test_execute_uses_generated_subject_and_body_when_present():
+    """Server-generated content (see server/app.py's _apply_live_content)
+    arrives as params.subject/params.body directly -- skip template
+    lookup entirely and send it verbatim."""
+    mock_smtp = _mock_smtp()
+    with patch("actions.email_send.smtplib.SMTP", return_value=mock_smtp):
+        result = execute(
+            {
+                "to": "cfo-puppet@corp.local",
+                "subject": "Q3 budget shortfall",
+                "body": "Hi team,\n\nWe can't fund the new proposal this quarter.\n\nThanks,\nJordan",
+                "template": "generic",  # should be ignored -- subject/body take priority
+            },
+            {"smtp": {}},
+        )
+
+    sent_msg = mock_smtp.send_message.call_args[0][0]
+    assert sent_msg["Subject"] == "Q3 budget shortfall"
+    assert sent_msg.get_content().strip() == (
+        "Hi team,\n\nWe can't fund the new proposal this quarter.\n\nThanks,\nJordan"
+    )
+    assert result["template"] == "(generated)"
+
+
+def test_execute_generated_body_with_dollar_sign_does_not_crash():
+    """Regression guard: generated prose can contain a literal '$' (e.g.
+    a dollar figure). string.Template.substitute() would raise on that
+    as an invalid placeholder -- the generated-content path must NOT run
+    subject/body through Template at all."""
+    mock_smtp = _mock_smtp()
+    with patch("actions.email_send.smtplib.SMTP", return_value=mock_smtp):
+        result = execute(
+            {
+                "to": "cfo-puppet@corp.local",
+                "subject": "Budget update: $50,000 over",
+                "body": "We are currently $50,000 over budget for this quarter.",
+            },
+            {"smtp": {}},
+        )
+
+    sent_msg = mock_smtp.send_message.call_args[0][0]
+    assert sent_msg["Subject"] == "Budget update: $50,000 over"
+    assert "$50,000" in sent_msg.get_content()
+    assert result["template"] == "(generated)"
+
+
+def test_execute_falls_back_to_template_when_subject_or_body_missing():
+    """Only subject WITHOUT body (or vice versa) shouldn't be treated as
+    "generated content present" -- falls back to the template path."""
+    mock_smtp = _mock_smtp()
+    with patch("actions.email_send.smtplib.SMTP", return_value=mock_smtp):
+        result = execute({"to": "x@corp.local", "subject": "Half-set content"}, {"smtp": {}})
+
+    assert result["template"] == "generic"

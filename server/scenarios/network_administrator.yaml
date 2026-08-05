@@ -1,0 +1,65 @@
+# Vantage Corp / IT. should_alert: bulk download of network device
+# config backups -- a real high-value target, since configs often
+# embed credentials, mirroring the airport network engineer pattern.
+
+persona: Network Administrator
+org: Vantage Corp
+department: IT
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://network-monitoring.vantage.local
+      - http://vpn-management-console.vantage.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: remote-staff-puppet@vantage.local
+      template: generic
+      content_brief: >
+        Write as the Network Administrator, notifying remote staff of a maintenance window tonight that will briefly interrupt VPN connectivity. Brief, technical tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: network_capacity_planning_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\vantage-fileserver01\\it"
+      ops: [browse, copy_file]
+      file: network_topology_diagram.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\vantage-fileserver01\\it"
+      ops: [browse, copy_file]
+      file: device_config_backups_all_2026.zip
+    duration: 3-6m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

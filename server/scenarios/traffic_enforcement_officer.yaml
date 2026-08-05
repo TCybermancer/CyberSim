@@ -1,0 +1,65 @@
+# Metro Emergency Services / Police. should_alert: anomalous access to
+# HR disciplinary records -- context/appropriateness misuse rather
+# than raw permission.
+
+persona: Traffic Enforcement Officer
+org: Metro Emergency Services
+department: Police
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://rms-records-system.mes.local
+      - http://citation-processing-portal.mes.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: traffic-unit-supervisor-puppet@mes.local
+      template: generic
+      content_brief: >
+        Write as a Traffic Enforcement Officer, requesting additional radar equipment for an upcoming school-zone enforcement initiative. Brief, routine tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: citation_activity_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mes-fileserver01\\traffic"
+      ops: [browse, copy_file]
+      file: school_zone_enforcement_schedule.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mes-fileserver01\\hr"
+      ops: [browse, copy_file]
+      file: officer_disciplinary_records.pdf
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

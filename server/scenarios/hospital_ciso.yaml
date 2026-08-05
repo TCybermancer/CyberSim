@@ -1,0 +1,65 @@
+# Metro Regional Hospital / Executive. should_alert: anomalous access to
+# donor contribution records -- the compromised-account lateral-
+# movement story, mirroring the SOC Analyst pattern used elsewhere.
+
+persona: Chief Information Security Officer
+org: Metro Regional Hospital
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://siem-dashboard.mrh.local
+      - http://vulnerability-management-portal.mrh.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: it-department-heads-puppet@mrh.local
+      template: generic
+      content_brief: >
+        Write as the Hospital CISO, notifying department heads of a mandatory phishing-awareness refresher training following a recent uptick in reported phishing attempts. Informative, no-alarm tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: security_risk_assessment_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mrh-fileserver01\\security"
+      ops: [browse, copy_file]
+      file: incident_response_plan.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mrh-fileserver01\\finance"
+      ops: [browse, copy_file]
+      file: donor_contribution_records.xlsx
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

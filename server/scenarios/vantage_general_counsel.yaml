@@ -1,0 +1,64 @@
+# Vantage Corp / Executive. should_alert: anomalous access to employee
+# investigation records -- a PII/sensitive misuse signature.
+
+persona: General Counsel
+org: Vantage Corp
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://contract-management-system.vantage.local
+      - http://compliance-portal.vantage.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: vantage-cfo-puppet@vantage.local
+      template: generic
+      content_brief: >
+        Write as the General Counsel, flagging a contract clause in a pending vendor agreement that needs financial review before signature. Procedural, careful tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: contract_review_tracking.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\vantage-fileserver01\\legal"
+      ops: [browse, copy_file]
+      file: litigation_hold_notice_log.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\vantage-fileserver01\\hr"
+      ops: [browse, copy_file]
+      file: employee_investigation_records.pdf
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

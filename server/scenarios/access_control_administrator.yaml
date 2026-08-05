@@ -1,0 +1,67 @@
+# Airport org / Security department. should_alert: anomalous access to
+# the executive access-log share (reconnaissance/probing pattern).
+
+persona: access_control_administrator
+org: Metro Airport
+department: Security
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://badge-access-control.corp.local
+      - http://intranet.corp.local
+    duration: 10-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: facilities-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the Access Control Administrator, confirming that a contractor's
+        access credentials have been provisioned for the terminal renovation
+        project, scoped to Concourse C construction zones only, effective Monday.
+        Concise, procedural tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: access_control_audit_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\security-ops"
+      ops: [browse, copy_file]
+      file: badge_zone_permissions_matrix.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\fileserver01\\executive"
+      ops: [browse, copy_file]
+      file: executive_access_logs_2026.xlsx
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

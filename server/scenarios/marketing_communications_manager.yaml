@@ -1,0 +1,65 @@
+# Vantage Corp / Marketing. should_alert: browsing a typosquat-style
+# external domain while researching a competitor's campaign --
+# phishing-adjacent signature.
+
+persona: Marketing Communications Manager
+org: Vantage Corp
+department: Marketing
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://cms-website-portal.vantage.local
+      - http://social-media-management-portal.vantage.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: pr-agency-puppet@agency.local
+      template: generic
+      content_brief: >
+        Write as the Marketing Communications Manager, coordinating the messaging and timing for an upcoming product launch press release. Professional, brief, coordinating tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: campaign_performance_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\vantage-fileserver01\\marketing"
+      ops: [browse, copy_file]
+      file: brand_style_guide.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: web_browse
+    delay_before: 20-40m
+    should_alert: true
+    targets:
+      - http://cms-website-portal.vantage.local
+      - http://competitor-campaign-analytics-verify.com
+    duration: 5-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session

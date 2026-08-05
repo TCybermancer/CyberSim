@@ -1,0 +1,65 @@
+# Meridian Logistics / Customer Service. should_alert: bulk export of
+# customer refund transaction data -- a PII/financial exfil
+# signature.
+
+persona: Returns Coordinator
+org: Meridian Logistics
+department: Customer Service
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://wms-portal.meridianlog.local
+      - http://returns-management-system.meridianlog.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: warehouse-manager-puppet@meridianlog.local
+      template: generic
+      content_brief: >
+        Write as the Returns Coordinator, flagging an unusually high return rate for one product line this month and requesting a quality investigation. Informational, brief tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: returns_processing_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\meridian-fileserver01\\customer-service"
+      ops: [browse, copy_file]
+      file: returns_policy_reference.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\meridian-fileserver01\\finance"
+      ops: [browse, copy_file]
+      file: customer_refund_transaction_export.csv
+    duration: 2-4m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

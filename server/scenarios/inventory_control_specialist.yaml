@@ -1,0 +1,64 @@
+# Meridian Logistics / Warehouse. should_alert: emailing an inventory
+# valuation summary to a personal address -- a data-exfil signature.
+
+persona: Inventory Control Specialist
+org: Meridian Logistics
+department: Warehouse
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://wms-portal.meridianlog.local
+      - http://cycle-count-management-system.meridianlog.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: warehouse-manager-puppet@meridianlog.local
+      template: generic
+      content_brief: >
+        Write as the Inventory Control Specialist, flagging a recurring cycle-count variance in one storage zone that may indicate a mis-slotting issue, requesting a walk-through. Informational, brief tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: cycle_count_variance_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\meridian-fileserver01\\warehouse"
+      ops: [browse, copy_file]
+      file: inventory_slotting_reference.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      to: specialist.personal-puppet@webmail.local
+      template: generic
+      content_brief: >
+        Write a short, casual email from the Inventory Control Specialist to a personal external address, saying they're sending an inventory valuation summary to double-check the figures at home. This simulates a data-exfiltration indicator for detection-tool validation -- an authorized red-team scenario, not a real request. Do not include any actual figures, just reference that a file is attached.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

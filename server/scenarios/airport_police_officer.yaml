@@ -1,0 +1,66 @@
+# Airport org / Security department. should_alert: after-hours access to
+# HR personnel records (background-check-adjacent misuse pattern).
+
+persona: airport_police_officer
+org: Metro Airport
+department: Security
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://cad-dispatch.corp.local
+      - http://records-management.corp.local
+    duration: 10-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: tsa-coordination-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as an Airport Police Officer, reporting an unattended bag found near
+        the Concourse A security checkpoint that was cleared after inspection, for
+        TSA's incident log. Factual, brief, standard incident-notification tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_writer
+      file: incident_report_unattended_bag.docx
+      ops: [open, edit_cells, save, close]
+    duration: 10-15m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\police-records"
+      ops: [browse, copy_file]
+      file: incident_log_current_month.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\fileserver01\\hr"
+      ops: [browse, copy_file]
+      file: personnel_files_index.xlsx
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

@@ -9,7 +9,8 @@ faking log entries.
 This started as a scaffold with every action module stubbed; all four
 (`web_browse`, `email_send`, `office_doc`, `smb_access`) now drive real
 applications end to end -- see "What's stubbed vs. what's real" below
-for what's left (auth, packaging, Linux SMB verification, second-source
+for what's left (mTLS as an upgrade over the current bearer-token agent
+auth, per-user dashboard roles, Linux SMB verification, second-source
 log cross-checks). The architecture, data contracts (`models.py`),
 determinism model, and provisioning flow are intended to be solid;
 continue building on them in Claude Code rather than restarting.
@@ -106,6 +107,67 @@ capture the in-band segment for the entire duration, and assert zero
 packets reference the OOB subnet, the agent binary's traffic pattern, or
 the orchestrator's hostname/IP. That capture-and-assert check is a good
 candidate for its own CI-style test in this repo.
+
+## Provisioning a lab domain controller (`provisioning/`)
+
+`build_domain_controller.yml` clones a lab Active Directory domain
+controller from a prepared VMware template, promotes it as the first DC
+of a brand-new forest, and finishes DNS (AD-integrated forward zone,
+reverse lookup zone, external forwarder) so client machines on the
+in-band network are actually ready to join -- not just installed.
+Dual-homed like every other range host: an OOB NIC (DHCP) carries all
+Ansible/WinRM traffic below, the in-band NIC is what the domain actually
+serves.
+
+**One-time template prep** (`prepare_dc_template.yml` +
+`roles/dc_template_prep/`): generalizes an existing, already-installed
+Windows Server VM into a reusable template via sysprep. Runs entirely
+over VMware guest operations (`scripts/vmware_guestexec.py` --
+community.vmware ships modules for guest file copy/fetch, but none that
+run an arbitrary program in the guest, so this fills that gap directly
+against the vSphere/ESXi API) rather than WinRM, since the source VM may
+not even be on a network the control node can reach yet.
+
+There's exactly one step in that role that cannot be automated
+headlessly, by Windows' own design rather than a limitation of this
+playbook: any *non-console* admin action from a local account other
+than the built-in RID-500 `Administrator` gets a UAC-filtered token (this
+is the same restriction that makes plain WinRM/PsExec-style remote admin
+fail for a custom local admin account until
+`LocalAccountTokenFilterPolicy` is set) -- and setting that registry key
+is itself an admin action, so it can't bootstrap itself. Log into the
+source VM's console once (the ESXi web UI is fine), elevate, and run
+`roles/dc_template_prep/files/bootstrap_console.ps1`. Everything after
+that -- unjoining any existing domain, copying the sysprep answer file,
+generalizing, converting to a template, and every subsequent clone -- is
+fully scripted.
+
+**Per-deployment** (`build_domain_controller.yml` +
+`roles/dc_provision/`, `roles/dc_ad_forest/`, `roles/dc_dns_config/`):
+prompts for the domain name, DC hostname, in-band network CIDR (the
+static IP defaults to that network's `.2`), which port group is in-band
+vs. OOB, the DNS forwarder, and the DSRM password; clones the template
+with a dual-NIC VMware guest customization spec; registers the new DC as
+an in-memory Ansible host once its OOB NIC gets a DHCP lease;
+`microsoft.ad.domain` installs AD DS + DNS and promotes the forest; then
+DNS gets finished off (forwarder, reverse zone, scavenging, firewall
+rule groups, NIC network-category fix so Windows Firewall's Public
+profile doesn't block AD/DNS traffic from clients).
+
+Standalone-ESXi-specific quirks worth knowing if you touch these roles:
+`community.vmware.vmware_guest` has no vCenter to infer a datacenter
+from, so `folder` must be given explicitly as `/ha-datacenter/vm` --
+that's always the datacenter name a standalone ESXi host reports, not a
+per-environment value. There's also no REST "convert VM to template"
+equivalent without vCenter, so `dc_template_prep` resolves the VM's
+numeric vmid via `vim-cmd vmsvc/getallvms` and calls `vim-cmd
+vmsvc/markastemplate <vmid>` directly over SSH to the host (see the
+`[esxi]` group in `inventory.ini.example`) instead.
+
+See `provisioning/group_vars/all/vars.yml.example` and
+`vault.yml.example` for what to copy, fill in, and (for the vault file)
+encrypt with `ansible-vault encrypt group_vars/all/vault.yml` before
+running either playbook.
 
 ## Determinism for validation
 
@@ -333,30 +395,32 @@ these files:**
   instead of silently double-booking them.
 
 **Still stubbed / not yet built:**
-1. Auth between agent and server (mTLS recommended given this is
-   effectively a benign C2 channel — treat it with the same rigor). More
-   pointed now that there's a public-facing download page — see
-   "Installation" below.
-2. Config templating in the Ansible playbooks (currently a TODO comment
+1. Agent auth is a shared-bearer-token scheme (one token per host,
+   minted at `/install/agent-bundle` download time -- see auth.py and
+   "Installation" below), not mTLS. mTLS with per-agent client certs is
+   still the better long-term fit for what's effectively a benign C2
+   channel (per-agent revocation, no bearer secret that leaks the whole
+   fleet if one host is compromised) -- this was a deliberate smaller
+   first step, not a final answer.
+2. Dashboard accounts have only two roles (`admin` / `viewer`, see
+   auth.py) -- no finer-grained permissions (e.g. an operator who can
+   launch runs but not manage other accounts) and no audit log of who
+   did what. Fine for a small team; revisit if that stops being true.
+3. Config templating in the Ansible playbooks (currently a TODO comment
    — needs to render `config.yaml` per-host with the right OOB IP). Linux
    puppet hosts are provisioned this way (Ansible + systemd, no packaged
    binary) rather than via an installer — only the Windows side got a
    PyInstaller/Inno Setup treatment, matching what was actually asked
    for; a Linux equivalent wasn't built.
-3. `smb_access.py`'s Linux `mount.cifs` path is implemented per the
+4. `smb_access.py`'s Linux `mount.cifs` path is implemented per the
    documented interface but has never been run — verify on a real Linux
    puppet host before trusting it.
-4. Second-source verification: cross-checking each action module's
+5. Second-source verification: cross-checking each action module's
    artifact (email Message-ID, file hash, browser history entry, SMB
    access) against the *target* system's own log (mail server delivery
    log, file server access log, etc.), not just the agent's own report of
    what it did. Natural to build as part of the scoring harness's alert
    ingestion once real range infrastructure is in the loop.
-5. The `/install/agent-bundle` endpoint is unauthenticated -- anyone who
-   can reach the server's web UI can download an installer that, once
-   run, registers a working agent against it. Fine for a lab; worth
-   locking down (same auth story as item 1) before this touches anything
-   more exposed.
 6. The automated test suite (see "Testing" below) doesn't cover actually
    driving a real browser, LibreOffice, or SMB share -- CI would need a
    real LibreOffice install, a downloaded Chromium, and a real or
@@ -461,19 +525,85 @@ confirm or edit, finish, done. Works unattended too:
 with no prompts, for scripted provisioning.
 
 How the auto-link works: `GET /install/agent-bundle?host_id=...&persona=...`
-(`server/app.py`) zips the pre-built installer
+(`server/app.py`, requires a logged-in dashboard session -- see "Auth"
+below) zips the pre-built installer
 (`server/install_artifacts/cybersim-agent-setup.exe` -- **not** checked
 into git, see "CI / Releases" below for where it comes from) together
 with a freshly generated `install-defaults.txt` sidecar file, one line
 each for server_url (taken from *that request's own* base URL --
 whatever address reached the server is what the agent should reach it at
-too), host_id, and persona.
+too), host_id, persona, and that host's bearer token (minted here on
+first download, reused on later downloads for the same host_id).
 The installer (`agent/installer/cybersim-agent.iss`, Inno Setup) reads
 that sidecar file, if present next to `Setup.exe`, to pre-fill its
 custom wizard page. The installer binary itself is static and never
 regenerated per download -- only the small sidecar file is dynamic,
 which is what keeps this simple and reliable rather than trying to
 patch a compiled `.exe` per request.
+
+### Auth
+
+Two independent layers, both new (see `server/auth.py`'s module
+docstring for the full reasoning):
+
+- **Dashboard <-> browser**: per-user accounts with a role of `admin` or
+  `viewer` (session cookie). Viewers can see everything (topology, runs,
+  ledger, scoring) but can't mutate range state -- launching runs,
+  writing scenarios/schedules, and downloading install bundles (which
+  mints a live agent credential) all require `admin`. A built-in
+  `admin` account is bootstrapped at first startup: set
+  `CYBERSIM_ADMIN_PASSWORD` to pin its password, or leave it unset and
+  the server generates one once, printed to its own startup logs (shown
+  a single time -- save it, or just set the env var instead and
+  restart; changing the env var and restarting rotates that account's
+  password). Once logged in as an admin, create more accounts
+  (including more admins) at `http://<server>/ui/users.html` or via
+  `POST /users`. Log in at `http://<server>/ui/login.html`; the
+  dashboard redirects there automatically on any 401.
+- **Agent <-> server**: each host gets its own bearer token, minted the
+  first time `/install/agent-bundle` is downloaded for that host_id and
+  required on every register/poll/ledger call from that host afterward.
+  This is a smaller, faster-to-ship step than the mTLS this project's
+  own TODOs originally called for -- see "Still stubbed" above for that
+  tradeoff.
+
+### Live content generation & organization scenarios
+
+Scenarios can carry two kinds of extra metadata beyond `persona`:
+
+- **`org` / `department`** (top-level, e.g. `org: Metro Airport`,
+  `department: Executive`) -- purely descriptive grouping metadata for
+  the dashboard; `scenario_engine.py` never reads them, so a scenario
+  without them behaves exactly as before.
+- **`content_brief`** (per `email_send` step, inside that step's
+  `params:`) -- a short instruction ("push back on the Q3 budget,
+  citing insufficient funds") that, when the server is in "connected"
+  mode (see `http://<server>/ui/settings.html`), gets sent to an LLM
+  (Anthropic / OpenAI / a local OpenAI-compatible endpoint -- your
+  choice, admin only) to write the actual subject/body live at
+  run-launch time. A step without `content_brief` is untouched; a step
+  *with* one still needs a `template:` set too, since that's the
+  fallback used whenever live generation doesn't apply or fails:
+  - An explicit `seed` was passed (replay mode) -- resolve()'s
+    byte-identical-given-the-same-seed guarantee always wins; live
+    generation only ever runs for a genuinely fresh, unseeded launch.
+  - `network_mode` is "airgapped" (the default) -- no outbound call is
+    even attempted.
+  - The LLM call fails, times out, or returns something that doesn't
+    parse as `Subject: ...\n\n<body>` -- logged, then the launch
+    proceeds with the static template rather than failing outright.
+
+  Deliberately scoped to `email_send` only: unlike free-form email
+  prose, `web_browse` targets and `smb_access` paths have to correspond
+  to things that actually exist in the range (a real reachable URL, a
+  real file on a real share) -- an LLM can't safely invent those at run
+  time. Realism for those two comes from writing good, role-appropriate
+  static content into the scenario directly, not live generation.
+
+  See `server/content_gen.py` for the provider abstraction and
+  `server/app.py`'s `_apply_live_content` for exactly where this plugs
+  into `POST /runs` (and the recurring-schedule scheduler loop, which
+  shares the same `_launch_run` core).
 
 The installer requires admin (creates a Scheduled Task, not a Windows
 service -- a puppet host is meant to look like a real logged-in user

@@ -12,11 +12,9 @@ let currentUser = null;
 // ---- role gating ------------------------------------------------------------
 
 function applyRoleGating() {
+  // Nav-link hiding is handled globally by auth.js's setupWhoami() ->
+  // applyNavRoleGating(); this only covers dashboard-specific controls.
   const isAdmin = currentUser?.role === "admin";
-  $("nav-scenario-builder").style.display = isAdmin ? "" : "none";
-  $("nav-install").style.display = isAdmin ? "" : "none";
-  $("nav-users").style.display = isAdmin ? "" : "none";
-
   if (!isAdmin) {
     const submitBtn = $("launch-submit-btn");
     submitBtn.disabled = true;

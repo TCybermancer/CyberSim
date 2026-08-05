@@ -1,0 +1,65 @@
+# Metro Regional Hospital / Clinical. should_alert: exporting the
+# hospital-wide patient census rather than just the ED's -- a bulk
+# PII overreach signature.
+
+persona: Emergency Department Charge Nurse
+org: Metro Regional Hospital
+department: Clinical
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://ehr-portal.mrh.local
+      - http://ed-tracking-board.mrh.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: ed-medical-director-puppet@mrh.local
+      template: generic
+      content_brief: >
+        Write as the Emergency Department Charge Nurse, sending an end-of-shift summary noting the department ran above capacity for several hours and recommending a staffing review. Professional, brief tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: ed_shift_staffing_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mrh-fileserver01\\clinical"
+      ops: [browse, copy_file]
+      file: ed_triage_protocols.docx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mrh-fileserver01\\clinical"
+      ops: [browse, copy_file]
+      file: patient_census_export_all_units.csv
+    duration: 2-4m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

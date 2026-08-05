@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberSim orchestrator — settings</title>
+<script>
+(function () {
+  var t = localStorage.getItem("cybersim-theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+<link rel="stylesheet" href="style.css?v=12">
+</head>
+<body>
+<div class="app-shell">
+  <nav class="sidebar">
+    <h1>CyberSim</h1>
+    <a href="./" class="sidebar-link">Dashboard</a>
+    <a id="nav-scenario-builder" href="scenario-builder.html" class="sidebar-link" style="display:none">Build scenario</a>
+    <a id="nav-install" href="install.html" class="sidebar-link" style="display:none">Install agent</a>
+    <a id="nav-users" href="users.html" class="sidebar-link" style="display:none">Users</a>
+    <a id="nav-settings" href="settings.html" class="sidebar-link active" style="display:none">Settings</a>
+  </nav>
+  <div class="app-main">
+    <div class="topbar">
+      <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
+      <span id="whoami-pill" class="pill pill-unknown"></span>
+      <button type="button" id="logout-btn" class="pill pill-unknown">log out</button>
+    </div>
+
+<main style="grid-template-columns: 1fr; max-width: 560px;">
+  <section class="col">
+    <div class="card" id="viewer-blocked-card" style="display:none">
+      <h2>Admin access required</h2>
+      <p class="hint" style="margin-top:0">Changing network/LLM settings requires an admin account.</p>
+    </div>
+
+    <div class="card" id="settings-card">
+      <h2>Network &amp; content generation</h2>
+      <p class="hint" style="margin-top:0">
+        Controls whether the server can call out to an LLM for realistic scenario content
+        (like a role-appropriate email body) at run-launch time. Agents themselves never make
+        this call — only this server does, and only when set to "connected". Runs launched
+        with an explicit seed (replays) always use the static template library regardless of
+        this setting, to keep exact reproducibility.
+      </p>
+
+      <form id="settings-form">
+        <label class="checkbox-label" style="margin-bottom:0.9rem">
+          <input type="checkbox" id="connected-toggle">
+          Connected <span class="hint">(unchecked = airgapped — no outbound calls, ever)</span>
+        </label>
+
+        <div id="provider-fields" style="display:none">
+          <label>
+            LLM provider
+            <select id="provider-select">
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openai">OpenAI</option>
+              <option value="local">Local / self-hosted (OpenAI-compatible)</option>
+            </select>
+          </label>
+
+          <div id="anthropic-fields" class="provider-fields">
+            <label>
+              Anthropic API key <span id="anthropic-key-status" class="hint"></span>
+              <input id="anthropic-key-input" type="password" placeholder="sk-ant-...">
+            </label>
+            <label>
+              Model <span class="hint">(optional — defaults to claude-sonnet-4-5)</span>
+              <input id="anthropic-model-input" type="text" placeholder="claude-sonnet-4-5">
+            </label>
+          </div>
+
+          <div id="openai-fields" class="provider-fields">
+            <label>
+              OpenAI API key <span id="openai-key-status" class="hint"></span>
+              <input id="openai-key-input" type="password" placeholder="sk-...">
+            </label>
+            <label>
+              Model <span class="hint">(optional — defaults to gpt-4o-mini)</span>
+              <input id="openai-model-input" type="text" placeholder="gpt-4o-mini">
+            </label>
+          </div>
+
+          <div id="local-fields" class="provider-fields">
+            <label>
+              Base URL <span class="hint">(OpenAI-compatible, e.g. http://localhost:11434/v1)</span>
+              <input id="local-url-input" type="text" placeholder="http://localhost:11434/v1">
+            </label>
+            <label>
+              Model
+              <input id="local-model-input" type="text" placeholder="llama3.1">
+            </label>
+            <label>
+              API key <span class="hint">(optional — most local servers don't need one)</span> <span id="local-key-status" class="hint"></span>
+              <input id="local-key-input" type="password">
+            </label>
+          </div>
+        </div>
+
+        <button type="submit">Save settings</button>
+      </form>
+      <div id="settings-result" class="result"></div>
+    </div>
+  </section>
+</main>
+  </div>
+</div>
+
+<script src="theme.js?v=1"></script>
+<script src="auth.js?v=3"></script>
+<script src="settings.js?v=1"></script>
+</body>
+</html>

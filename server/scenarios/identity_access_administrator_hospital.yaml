@@ -1,0 +1,67 @@
+# Metro Regional Hospital / IT (covers Active Directory). should_alert:
+# accessing board compensation-committee notes -- this role can
+# technically reach almost anything, so the flag is context/
+# appropriateness rather than raw permission, mirroring the airport
+# counterpart's pattern intentionally.
+
+persona: Identity & Access Administrator
+org: Metro Regional Hospital
+department: IT
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://ad-management-console.mrh.local
+      - http://identity-governance.mrh.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: department-heads-puppet@mrh.local
+      template: generic
+      content_brief: >
+        Write as the Identity & Access Administrator, informing department heads that this quarter's access review identified several stale accounts belonging to former staff that will be disabled in five business days unless a business justification is provided. Formal, procedural tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: quarterly_access_review.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mrh-fileserver01\\it"
+      ops: [browse, copy_file]
+      file: ad_group_membership_export.csv
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\mrh-fileserver01\\executive"
+      ops: [browse, copy_file]
+      file: board_compensation_committee_notes.pdf
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

@@ -1,0 +1,66 @@
+# Airport org / Airport Operations department. should_alert: browsing a
+# spoofed "gate-schedule-sync" domain (credential-phishing-style page).
+
+persona: gate_management_coordinator
+org: Metro Airport
+department: Airport Operations
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://gate-assignment-system.corp.local
+      - http://airline-schedules.corp.local
+    duration: 10-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: airline-ops-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the Gate Management Coordinator, notifying an airline's station
+        ops team of a last-minute gate reassignment for an inbound flight due to a
+        mechanical delay on the aircraft currently occupying the original gate.
+        Brief, operational, time-sensitive tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: gate_utilization_schedule.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-15m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\gate-ops"
+      ops: [browse, copy_file]
+      file: gate_contingency_plan.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: web_browse
+    delay_before: 20-40m
+    should_alert: true
+    targets:
+      - http://gate-schedule-sync-verify.example
+    duration: 2-5m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session

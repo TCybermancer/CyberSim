@@ -1,0 +1,72 @@
+# Airport org / Executive department. Airport Operations Center (AOC)
+# coordinator -- real-time ops coordination hub, so the should_alert step
+# here is an anomalous *internal* access pattern (reaching into the SOC's
+# share, which an AOC role has no normal reason to touch) rather than an
+# email/exfil pattern -- see the other Executive roles for variety.
+
+persona: aoc_coordinator
+org: Metro Airport
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://ops-dashboard.corp.local
+      - http://weather.corp.local
+      - http://fids-admin.corp.local
+    duration: 10-20m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: airfield-ops-puppet@corp.local
+      template: generic
+      content_brief: >
+        Write as the AOC Coordinator, notifying Airfield Operations, the airlines
+        distribution list, and ATC that Runway 9L will close for scheduled
+        maintenance tonight from 0100-0400 local, with Runway 9R handling all
+        overnight traffic. Concise, operational tone -- this is a routine NOTAM-style
+        coordination email, not an emergency.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: aoc_daily_ops_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-15m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\fileserver01\\operations"
+      ops: [browse, copy_file]
+      file: notam_bulletin_current.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: smb_access
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      share: "\\\\fileserver01\\soc"
+      ops: [browse, copy_file]
+      file: incident_response_playbook.docx
+    duration: 1-2m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log

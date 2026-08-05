@@ -1,0 +1,65 @@
+# Metro Emergency Services / Fire. should_alert: browsing a
+# typosquat-style external domain while researching a chemical --
+# phishing-adjacent, distinct from the smb-based Fire signatures.
+
+persona: Hazmat Specialist
+org: Metro Emergency Services
+department: Fire
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://hazmat-response-database.mes.local
+      - http://chemical-inventory-portal.mes.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: fire-prevention-puppet@mes.local
+      template: generic
+      content_brief: >
+        Write as a Hazmat Specialist, flagging that a local business's chemical storage permit renewal appears overdue and requesting a compliance follow-up. Informational tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: hazmat_response_readiness_checklist.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mes-fileserver01\\fire"
+      ops: [browse, copy_file]
+      file: hazmat_response_procedures.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: web_browse
+    delay_before: 20-40m
+    should_alert: true
+    targets:
+      - http://hazmat-response-database.mes.local
+      - http://sds-lookup-verify.com
+    duration: 5-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session

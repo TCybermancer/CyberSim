@@ -1,0 +1,65 @@
+# Meridian Logistics / Fleet. should_alert: browsing a typosquat-style
+# external domain while checking a fuel card balance -- phishing-
+# adjacent signature, distinct from the other Fleet roles.
+
+persona: Delivery Driver
+org: Meridian Logistics
+department: Fleet
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://tms-portal.meridianlog.local
+      - http://route-navigation-portal.meridianlog.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: fleet-dispatcher-puppet@meridianlog.local
+      template: generic
+      content_brief: >
+        Write as a Delivery Driver, reporting a minor vehicle issue (a dashboard warning light) noticed during their route today and requesting it be looked at before tomorrow's shift. Brief, routine tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: daily_delivery_log.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\meridian-fileserver01\\fleet"
+      ops: [browse, copy_file]
+      file: vehicle_inspection_checklist.pdf
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: web_browse
+    delay_before: 20-40m
+    should_alert: true
+    targets:
+      - http://tms-portal.meridianlog.local
+      - http://meridianlog-fuelcard-verify.com
+    duration: 5-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session

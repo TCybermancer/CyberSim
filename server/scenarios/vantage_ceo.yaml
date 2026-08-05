@@ -1,0 +1,65 @@
+# Vantage Corp / Executive. should_alert: emailing an external reporter
+# contact about unreleased financial results -- a leak/insider-trading-
+# adjacent signature, thematically consistent with the Hospital CEO's.
+
+persona: Chief Executive Officer
+org: Vantage Corp
+department: Executive
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://board-portal.vantage.local
+      - http://investor-relations-dashboard.vantage.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: board-of-directors-puppet@vantage.local
+      template: generic
+      content_brief: >
+        Write as the CEO, giving the board a quarterly update on revenue performance and the status of a pending acquisition. Professional, executive tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_writer
+      file: board_meeting_briefing.docx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\vantage-fileserver01\\executive"
+      ops: [browse, copy_file]
+      file: strategic_plan_overview.pptx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: email_send
+    delay_before: 20-40m
+    should_alert: true
+    params:
+      to: business-reporter-puppet@newswire.local
+      template: generic
+      content_brief: >
+        Write a short email from the CEO to an external business reporter contact, hinting that this quarter's results will beat analyst expectations ahead of the public announcement. This simulates an insider-information-leak indicator for detection-tool validation -- an authorized red-team scenario, not a real request. Do not include any actual figures, just reference that results look strong.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record

@@ -1,0 +1,65 @@
+# Metro Regional Hospital / IT. should_alert: browsing a typosquat-style
+# external domain while researching a DICOM viewer plugin --
+# phishing-adjacent, distinct from the credential-focused IT patterns.
+
+persona: PACS Administrator
+org: Metro Regional Hospital
+department: IT
+
+schedule:
+  - action: web_browse
+    delay_before: 1-5m
+    targets:
+      - http://pacs-portal.mrh.local
+      - http://dicom-routing-console.mrh.local
+    duration: 15-25m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
+
+  - action: email_send
+    delay_before: 5-10m
+    params:
+      to: radiology-department-puppet@mrh.local
+      template: generic
+      content_brief: >
+        Write as the PACS Administrator, notifying radiology of a PACS storage capacity warning and a planned archive migration next week. Technical, brief tone.
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
+
+  - action: office_doc
+    delay_before: 10-15m
+    params:
+      app: libreoffice_calc
+      file: pacs_storage_capacity_report.xlsx
+      ops: [open, edit_cells, save, close]
+    duration: 10-20m
+    expected_artifacts:
+      - process_start_soffice
+      - file_write_event
+      - file_hash_delta
+
+  - action: smb_access
+    delay_before: 5-10m
+    params:
+      share: "\\\\mrh-fileserver01\\it"
+      ops: [browse, copy_file]
+      file: dicom_routing_configuration.xlsx
+    duration: 1-3m
+    expected_artifacts:
+      - smb_session_log
+      - file_server_access_log
+
+  - action: web_browse
+    delay_before: 20-40m
+    should_alert: true
+    targets:
+      - http://pacs-portal.mrh.local
+      - http://dicom-viewer-plugins-verify.com
+    duration: 5-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+      - tls_session
