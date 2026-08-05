@@ -482,10 +482,32 @@ Two supported ways to run the orchestrator on a real Linux host; pick
 one, not both.
 
 **Docker** (`server/Dockerfile`, `server/docker-compose.yml`):
+
+CyberSim does not currently publish a prebuilt server container image.
+Docker Compose builds the image locally from the repository, so clone the
+repository (recommended) or download and extract GitHub's source ZIP first.
+
 ```bash
-cd server
-docker compose up -d          # builds cybersim-server:latest, runs it
+git clone https://github.com/TCybermancer/CyberSim.git
+cd CyberSim/server
+docker compose up -d --build   # builds cybersim-server:latest and runs it
 ```
+
+To update an existing clone later:
+
+```bash
+cd CyberSim
+git pull
+cd server
+docker compose up -d --build
+```
+
+You do not need to download the files individually. If Git is unavailable,
+use GitHub's **Code > Download ZIP**, extract it, then run
+`docker compose up -d --build` from the extracted `CyberSim/server`
+directory. A future GHCR/Docker Hub release could support `docker pull`, but
+there is no published server image to pull today.
+
 The SQLite DB lives at `/data` inside the container (`CYBERSIM_DB_PATH`,
 read by `db.py`), backed by a named volume so it survives container
 recreation -- verified by hand: created a run, `docker rm`'d the
