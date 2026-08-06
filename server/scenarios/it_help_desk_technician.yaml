@@ -5,6 +5,7 @@
 persona: it_help_desk_technician
 org: Metro Airport
 department: IT
+after_hours_eligible: true
 
 schedule:
   - action: web_browse

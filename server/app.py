@@ -25,6 +25,19 @@ Agents on the in-band range network reach this API only via their OOB NIC
   DELETE /schedules/{id}        cancel a schedule
   POST /runs/{id}/score         score a run's ledger against an uploaded detection-tool
                                 alert export (for the UI's scoring view; see scoring_core.py)
+  POST /ranges                 create a multi-day, business-hours-window range (see
+                                scenario_engine.resolve_window, db.py's ranges tables) --
+                                one (host, scenario) pair per machine, fired once per
+                                business day rather than a single flat run
+  GET  /ranges                 ranges known to the server (for the UI's ranges list)
+  GET  /ranges/{id}             one range's config + hosts + injections so far
+  PATCH /ranges/{id}            pause/resume a range
+  DELETE /ranges/{id}           cancel a range
+  POST /ranges/{id}/injections  red-team-directed manual targeting: graft a specific
+                                suspicious_behaviors.yaml entry onto a specific host's
+                                specific day ahead of time
+  GET  /suspicious-behaviors    the injection library (id/label/category/tags) for the
+                                UI's manual-injection picker
   GET  /install/agent-bundle   zips/tars the pre-built agent installer (?os=windows,
                                 the default, or ?os=linux) with a per-request sidecar
                                 file pre-filling its wizard/prompts with *this*
@@ -72,12 +85,15 @@ import asyncio
 import hmac
 import io
 import os
+import random
 import tarfile
 import uuid
 import zipfile
-from datetime import datetime, timedelta
+import zlib
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
@@ -91,11 +107,12 @@ import db
 import remote_install
 import scoring_core
 from models import ActionSpec, ActionType, AgentRegistration, CompletionRecord, IntentRecord, PollResponse
-from scenario_engine import load_scenario, resolve
+from scenario_engine import load_scenario, resolve, resolve_window
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 STATIC_DIR = Path(__file__).parent / "static"
 INSTALL_ARTIFACTS_DIR = Path(__file__).parent / "install_artifacts"
+SUSPICIOUS_BEHAVIORS_PATH = Path(__file__).parent / "suspicious_behaviors.yaml"
 AGENT_INSTALLER_NAME = "cybersim-agent-setup.exe"
 AGENT_LINUX_BINARY_NAME = "cybersim-agent"
 AGENT_LINUX_INSTALL_SCRIPT_NAME = "install-linux.sh"
@@ -149,6 +166,7 @@ async def startup():
     # startup handler off the main event loop, and asyncio.create_task
     # requires a running loop on the calling thread.
     asyncio.create_task(_scheduler_loop())
+    asyncio.create_task(_range_loop())
 
 
 # Paths reachable with no auth at all: the static dashboard shell (holds
@@ -669,6 +687,369 @@ def update_schedule(schedule_id: str, req: ScheduleUpdateRequest):
 def remove_schedule(schedule_id: str):
     if not db.delete_schedule(schedule_id):
         raise HTTPException(404, f"schedule '{schedule_id}' not found")
+
+
+# ---- ranges -------------------------------------------------------------
+# Multi-day, business-hours-window scheduling -- see scenario_engine.
+# resolve_window() and db.py's "Multi-day, business-hours-window Ranges"
+# comment. Unlike /schedules (a flat interval repeat of one scenario
+# across a fixed host list), a range spreads each host's OWN scenario
+# across a business-hours window once per day for num_days, and may graft
+# one suspicious_behaviors.yaml entry onto a given host's given day --
+# either an operator-directed manual injection (this section) or an
+# automatic rare daily roll (_maybe_auto_inject below).
+
+
+def _load_suspicious_behaviors() -> list[dict]:
+    """Read fresh every call, not cached at startup -- same "always see
+    the latest content on disk" philosophy as load_scenario() for
+    server/scenarios/*.yaml (see docs/README.md)."""
+    with open(SUSPICIOUS_BEHAVIORS_PATH) as f:
+        return yaml.safe_load(f)
+
+
+def _logical_day_window(range_row: dict, day_index: int) -> tuple[datetime, datetime]:
+    """The [window_start, window_end) a range's given day *conceptually*
+    represents, in naive UTC (this codebase's convention throughout) --
+    purely a function of start_date/window_start_local/window_end_local/
+    timezone/day_index, with no time_scale applied. This is what a day's
+    window meant before compression existed, and still is the "what hour
+    of an 8-4 business day is this" anchor _day_window_utc scales from.
+
+    day_index counts consecutive CALENDAR days from start_date; weekends
+    aren't skipped in this first pass (every day of a Range fires,
+    business-hours-windowed, whether or not it's a weekday). Skipping
+    weekends is a natural, backward-compatible follow-up if wanted --
+    it only changes how day_index maps to a calendar date, not anything
+    about how a day's window itself gets resolved."""
+    tz = ZoneInfo(range_row["timezone"])
+    day = date.fromisoformat(range_row["start_date"]) + timedelta(days=day_index)
+    start_h, start_m = (int(x) for x in range_row["window_start_local"].split(":"))
+    end_h, end_m = (int(x) for x in range_row["window_end_local"].split(":"))
+    local_start = datetime(day.year, day.month, day.day, start_h, start_m, tzinfo=tz)
+    local_end = datetime(day.year, day.month, day.day, end_h, end_m, tzinfo=tz)
+    return (
+        local_start.astimezone(dt_timezone.utc).replace(tzinfo=None),
+        local_end.astimezone(dt_timezone.utc).replace(tzinfo=None),
+    )
+
+
+def _day_window_utc(range_row: dict, day_index: int) -> tuple[datetime, datetime]:
+    """The REAL wall-clock [window_start, window_end) a range's given day
+    actually fires/spreads its actions across -- _logical_day_window()
+    scaled by time_scale.
+
+    Day 0 always launches at its own logical moment, completely
+    unaffected by time_scale: a range's first day fires exactly when
+    you'd expect regardless of how compressed the rest of it is. Every
+    later day's distance from day 0 -- both the gap between days (nights,
+    weekends) and each day's own within-day span -- gets multiplied by
+    time_scale, so a range plays out faster while every day keeps its
+    relative position/duration proportional to the others.
+
+    At time_scale=1.0 this is the identity for every day (real == logical
+    always, not just for day 0) -- so this degenerates to exactly what
+    _day_window_utc computed before time_scale compression existed, no
+    special-casing needed, and every test/behavior written against the
+    uncompressed default keeps working unchanged."""
+    logical_start, logical_end = _logical_day_window(range_row, day_index)
+    time_scale = range_row.get("time_scale") or 1.0
+    if time_scale == 1.0 or day_index == 0:
+        return logical_start, logical_end
+
+    day0_start, _ = _logical_day_window(range_row, 0)
+    real_start = day0_start + (logical_start - day0_start) * time_scale
+    real_end = real_start + (logical_end - logical_start) * time_scale
+    return real_start, real_end
+
+
+def _day_seed(base_seed: int | None, host: str, day_index: int) -> int | None:
+    """None (fresh distributional draw every day) if the range itself has
+    no seed; otherwise deterministically derives a distinct-but-
+    reproducible seed per (host, day) from the range's base seed -- so a
+    seeded range's day 2 isn't a byte-identical repeat of day 1, but the
+    whole range is still exactly replayable given the same base seed.
+    zlib.crc32 rather than Python's built-in hash(): str hashing is
+    randomized per-process (PYTHONHASHSEED) unless explicitly disabled,
+    which would break this the moment the server restarts mid-range."""
+    if base_seed is None:
+        return None
+    return zlib.crc32(f"{base_seed}:{host}:{day_index}".encode())
+
+
+def _maybe_auto_inject(rng: dict, host: str, day_index: int, scenario: dict) -> dict | None:
+    """injection_mode='auto' only: rolls injection_probability for this
+    host's day: on a hit, picks a tag-matching library entry (tags
+    matching the scenario's own `persona` value, or tagged "any") and
+    persists it as a new range_injections row (created_by="auto") so a
+    later tick's get_range_injection() lookup finds it and doesn't
+    re-roll -- same downstream row shape a manual injection produces.
+
+    Uses plain module-level `random`, not scenario_engine's seeded rng:
+    "should today have an incident at all" is a range-loop policy
+    decision, not part of resolve_window()'s deterministic-replay
+    contract -- the same way /schedules' own interval/due-tick timing
+    isn't part of resolve()'s seeded contract either."""
+    if random.random() >= rng["injection_probability"]:
+        return None
+    behaviors = _load_suspicious_behaviors()
+    persona = scenario.get("persona", "")
+    eligible = [b for b in behaviors if "any" in b.get("tags", []) or persona in b.get("tags", [])]
+    if not eligible:
+        return None
+    behavior = random.choice(eligible)
+    db.save_range_injection(
+        str(uuid.uuid4()),
+        rng["range_id"],
+        host,
+        day_index,
+        behavior["id"],
+        "auto",
+        None,
+        datetime.utcnow().isoformat(),
+    )
+    return db.get_range_injection(rng["range_id"], host, day_index)
+
+
+def _resolve_injection(rng: dict, host: str, day_index: int, scenario: dict) -> tuple[dict | None, dict | None]:
+    """Returns (behavior_dict, substitutions) for this host's this day, or
+    (None, None) for a clean day. A pre-existing range_injections row --
+    inserted ahead of time by a red-team operator via POST
+    /ranges/{id}/injections, or by an earlier tick's auto-mode roll --
+    always wins; auto mode only ever rolls a *new* one when nothing's
+    there yet, so a manual injection is never silently overwritten."""
+    row = db.get_range_injection(rng["range_id"], host, day_index)
+    if row is None and rng["injection_mode"] == "auto":
+        row = _maybe_auto_inject(rng, host, day_index, scenario)
+    if row is None:
+        return None, None
+    behavior = next((b for b in _load_suspicious_behaviors() if b["id"] == row["behavior_id"]), None)
+    if behavior is None:
+        return None, None  # behavior_id no longer in the library -- treat as no injection rather than crash
+    return behavior, row["params_override"]
+
+
+async def _fire_range_day(rng: dict, now: datetime, settings: dict):
+    range_id = rng["range_id"]
+    day_index = rng["current_day_index"]
+    if day_index >= rng["num_days"]:
+        db.update_range_after_day(range_id, now.isoformat(), day_index, False)
+        return
+
+    window_start, window_end = _day_window_utc(rng, day_index)
+
+    for h in db.get_range_hosts(range_id):
+        host = h["host"]
+        if db.active_runs_for_hosts([host]):
+            # Still mid-run -- from a previous day, or a stuck/offline
+            # agent -- skip-and-retry-next-tick, same graceful
+            # degradation _scheduler_loop already relies on. This host
+            # simply misses today's launch rather than blocking every
+            # other host in the range: the day cursor still advances
+            # below regardless of this skip.
+            continue
+        try:
+            scenario = load_scenario(SCENARIOS_DIR / f"{h['scenario_name']}.yaml")
+        except FileNotFoundError:
+            continue  # scenario file removed after the range was created
+
+        behavior, substitutions = _resolve_injection(rng, host, day_index, scenario)
+        run_id, seed_used, specs = resolve_window(
+            scenario,
+            [host],
+            window_start,
+            window_end,
+            _day_seed(rng["seed"], host, day_index),
+            injected_behavior=behavior,
+            after_hours_eligible=bool(scenario.get("after_hours_eligible", False)),
+            substitutions=substitutions,
+        )
+        _apply_mail_server_override(specs, settings)
+        db.save_run(
+            run_id,
+            h["scenario_name"],
+            seed_used,
+            window_start.isoformat(),
+            range_id=range_id,
+            day_index=day_index,
+        )
+        db.save_action_specs([s.model_dump(mode="json") for s in specs])
+
+    next_day_index = day_index + 1
+    done = next_day_index >= rng["num_days"]
+    next_launch_at = now.isoformat() if done else _day_window_utc(rng, next_day_index)[0].isoformat()
+    db.update_range_after_day(range_id, next_launch_at, next_day_index, not done)
+
+
+_RANGE_LOOP_POLL_SECONDS = 15  # same cadence as _scheduler_loop
+
+
+async def _range_loop():
+    """Fires due Range days. Same lightweight asyncio poll-loop shape as
+    _scheduler_loop, and reuses the exact same per-host busy check
+    (db.active_runs_for_hosts) for the exact same reason -- except at
+    per-host, not per-range, granularity: one stuck host only costs
+    itself missed days, never the other hosts in the same range (see
+    _fire_range_day).
+
+    time_scale compression happens inside _day_window_utc -- this loop
+    doesn't need to know about it: it just asks for "day N's real
+    window" and gets back an already-scaled answer."""
+    while True:
+        try:
+            now = datetime.utcnow()
+            settings = db.get_settings()
+            for rng in db.due_ranges(now.isoformat()):
+                await _fire_range_day(rng, now, settings)
+        except Exception:
+            pass  # one bad range/day should never kill the whole loop
+        await asyncio.sleep(_RANGE_LOOP_POLL_SECONDS)
+
+
+class RangeHostAssignment(BaseModel):
+    host: str
+    scenario_name: str
+
+
+class RangeCreateRequest(BaseModel):
+    name: str
+    start_date: str  # "YYYY-MM-DD" -- the range's day-0 date, in `timezone`
+    num_days: int = Field(ge=1)
+    window_start_local: str = "08:00"
+    window_end_local: str = "16:00"
+    timezone: str = "UTC"
+    time_scale: float = Field(default=1.0, gt=0)  # 1.0 = real-time; <1.0 compresses -- see _day_window_utc
+    injection_mode: str = Field(pattern=r"^(auto|manual)$")
+    injection_probability: float = Field(default=0.0, ge=0, le=1)
+    seed: int | None = None
+    hosts: list[RangeHostAssignment] = Field(min_length=1)
+
+
+@app.post("/ranges", dependencies=[Depends(require_admin)])
+def create_range(req: RangeCreateRequest):
+    missing = sorted({h.scenario_name for h in req.hosts if not (SCENARIOS_DIR / f"{h.scenario_name}.yaml").exists()})
+    if missing:
+        raise HTTPException(404, f"scenario(s) not found: {', '.join(missing)}")
+    hosts_seen = [h.host for h in req.hosts]
+    if len(hosts_seen) != len(set(hosts_seen)):
+        raise HTTPException(422, "duplicate host in hosts list")
+    try:
+        ZoneInfo(req.timezone)
+    except ZoneInfoNotFoundError:
+        raise HTTPException(422, f"unknown timezone '{req.timezone}'")
+
+    range_id = str(uuid.uuid4())
+    # Day 0 is unaffected by time_scale either way (see _day_window_utc),
+    # but pass it through anyway rather than leaning on that short-circuit.
+    first_window_start, _ = _day_window_utc(
+        {
+            "start_date": req.start_date,
+            "window_start_local": req.window_start_local,
+            "window_end_local": req.window_end_local,
+            "timezone": req.timezone,
+            "time_scale": req.time_scale,
+        },
+        0,
+    )
+    db.save_range(
+        range_id,
+        req.name,
+        req.start_date,
+        req.num_days,
+        req.window_start_local,
+        req.window_end_local,
+        req.timezone,
+        req.time_scale,
+        req.injection_mode,
+        req.injection_probability,
+        req.seed,
+        first_window_start.isoformat(),
+        datetime.utcnow().isoformat(),
+    )
+    db.save_range_hosts(range_id, [(h.host, h.scenario_name) for h in req.hosts])
+    return db.get_range(range_id)
+
+
+@app.get("/ranges")
+def list_ranges():
+    return {"ranges": db.list_ranges()}
+
+
+@app.get("/ranges/{range_id}")
+def get_range(range_id: str):
+    r = db.get_range(range_id)
+    if not r:
+        raise HTTPException(404, f"range '{range_id}' not found")
+    return {**r, "hosts": db.get_range_hosts(range_id), "injections": db.list_range_injections(range_id)}
+
+
+class RangeUpdateRequest(BaseModel):
+    enabled: bool
+
+
+@app.patch("/ranges/{range_id}", dependencies=[Depends(require_admin)])
+def update_range(range_id: str, req: RangeUpdateRequest):
+    if not db.set_range_enabled(range_id, req.enabled):
+        raise HTTPException(404, f"range '{range_id}' not found")
+    return {"status": "ok"}
+
+
+@app.delete("/ranges/{range_id}", status_code=204, dependencies=[Depends(require_admin)])
+def remove_range(range_id: str):
+    if not db.delete_range(range_id):
+        raise HTTPException(404, f"range '{range_id}' not found")
+
+
+class RangeInjectionCreateRequest(BaseModel):
+    host: str
+    day_index: int = Field(ge=0)
+    behavior_id: str
+    params_override: dict[str, Any] | None = None
+
+
+@app.post("/ranges/{range_id}/injections", dependencies=[Depends(require_admin)])
+def create_range_injection(range_id: str, req: RangeInjectionCreateRequest):
+    """Red-team-directed manual targeting -- graft a specific
+    suspicious_behaviors.yaml entry onto a specific host's specific day
+    ahead of time. Rejects a day_index that's already past the range's
+    num_days, a host that isn't part of this range, an unknown
+    behavior_id, or a second injection on a host/day that already has
+    one (delete isn't exposed yet -- recreate the range's injection list
+    intentionally rather than silently letting a later call clobber an
+    earlier one)."""
+    r = db.get_range(range_id)
+    if not r:
+        raise HTTPException(404, f"range '{range_id}' not found")
+    if req.day_index >= r["num_days"]:
+        raise HTTPException(422, f"day_index {req.day_index} is out of range for a {r['num_days']}-day range")
+    if req.host not in {h["host"] for h in db.get_range_hosts(range_id)}:
+        raise HTTPException(404, f"host '{req.host}' is not part of range '{range_id}'")
+    if not any(b["id"] == req.behavior_id for b in _load_suspicious_behaviors()):
+        raise HTTPException(404, f"behavior '{req.behavior_id}' not found in suspicious_behaviors.yaml")
+    if db.get_range_injection(range_id, req.host, req.day_index):
+        raise HTTPException(409, f"an injection already exists for {req.host} on day {req.day_index}")
+
+    db.save_range_injection(
+        str(uuid.uuid4()),
+        range_id,
+        req.host,
+        req.day_index,
+        req.behavior_id,
+        "manual",
+        req.params_override,
+        datetime.utcnow().isoformat(),
+    )
+    return {"status": "ok"}
+
+
+@app.get("/suspicious-behaviors")
+def list_suspicious_behaviors():
+    return {
+        "behaviors": [
+            {"id": b["id"], "label": b.get("label", b["id"]), "category": b.get("category"), "tags": b.get("tags", [])}
+            for b in _load_suspicious_behaviors()
+        ]
+    }
 
 
 @app.post("/runs/{run_id}/score")

@@ -6,3 +6,7 @@ python-multipart>=0.0.9
 requests>=2.31
 paramiko>=3.4      # SSH client for POST /install/remote's Linux targets (remote_install.py)
 pywinrm>=0.4        # WinRM client for POST /install/remote's Windows targets (remote_install.py)
+tzdata>=2024.1      # zoneinfo's IANA database fallback -- Windows never ships one natively,
+                     # and some minimal Linux images don't either; needed by app.py's Ranges
+                     # (_day_window_utc's ZoneInfo() calls) whenever the OS doesn't provide it.
+                     # Harmless/inert extra weight on a host that already has system tzdata.

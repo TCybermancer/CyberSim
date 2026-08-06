@@ -35,7 +35,7 @@ function getCurrentUser() {
   return _currentUserPromise;
 }
 
-const NAV_LINK_IDS = ["nav-scenario-builder", "nav-install", "nav-users", "nav-settings"];
+const NAV_LINK_IDS = ["nav-scenario-builder", "nav-ranges", "nav-install", "nav-users", "nav-settings"];
 
 // Every admin-only page (build scenario, install, users, settings) is
 // linked from the sidebar on *every* page, not just the dashboard --

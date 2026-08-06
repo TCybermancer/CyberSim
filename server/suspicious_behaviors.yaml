@@ -1,0 +1,153 @@
+# Suspicious-behavior library for Ranges' injection system (see
+# scenario_engine.resolve_window() and app.py's _range_loop). Unlike a
+# scenario file's baked-in should_alert step -- fixed, one per persona,
+# always fires -- these are composable, persona-agnostic behaviors a
+# Range grafts onto a specific host's specific day, either:
+#   - auto mode: a rare per-day probability roll picks one whose `tags`
+#     match that host's persona (or `any`), or
+#   - manual mode: a red-team operator picks one explicitly for a
+#     specific host/day, so they can target and ad-lib around a
+#     particular user's story instead of leaving it to chance.
+#
+# Each entry's `steps` use the same shape as a scenario schedule step
+# (action/params/duration/expected_artifacts) and get appended into that
+# day's resolved schedule by resolve_window(), tagged should_alert: true.
+# A multi-step entry (category: chained) is one continuous narrative
+# (e.g. stage a file, then exfil it later the same day) rather than
+# several independent injections.
+#
+# `tags: [any]` = offered for any persona. Specific tags (matching a
+# scenario file's `persona:` value, case-sensitive) narrow it to personas
+# it's actually plausible for -- mirrors which roles a real detection
+# team would expect this behavior from.
+#
+# {{placeholder}} params are filled in by resolve_window() at injection
+# time (a share path, a search query, etc.) -- see that function's
+# docstring for the exact substitution rules.
+
+- id: google_search_suspicious
+  label: "Googling something they shouldn't"
+  category: web_browse
+  tags: [any]
+  steps:
+    - action: web_browse
+      params:
+        target: "https://www.google.com/search?q={{query}}"
+      duration: 3-8m
+      expected_artifacts:
+        - browser_history_entry
+        - dns_query
+        - tls_session
+
+- id: rnd_secrets_smb
+  label: "IT pulling R&D secrets over SMB"
+  category: smb_access
+  tags: [it_help_desk_technician, "IT Help Desk Technician", systems_administrator,
+         "Systems Administrator", "Network Administrator", "DevOps Engineer",
+         "Cloud Infrastructure Administrator"]
+  steps:
+    - action: smb_access
+      params:
+        share: "{{share}}"
+        ops: [browse, copy_file]
+      duration: 1-3m
+      expected_artifacts:
+        - smb_session_log
+        - file_server_access_log
+
+- id: hidden_file_staging_exfil
+  label: "Staging a hidden copy before exfiltrating it"
+  category: chained
+  tags: [any]
+  steps:
+    - action: smb_access
+      params:
+        share: "{{share}}"
+        ops: [copy_file]
+        local_copy_dir: "./.cache/.sys_tmp"
+      duration: 1-2m
+      expected_artifacts:
+        - smb_session_log
+        - file_write_event
+    - action: email_send
+      delay_before: 30-90m
+      params:
+        to: "personal-puppet@webmail.local"
+        template: generic
+        content_brief: >
+          Write a short, casual email forwarding a work file to a personal
+          address so they can "keep working on it from home later." This
+          simulates a potential data-exfiltration indicator for
+          detection-tool validation -- an authorized red-team scenario,
+          not a real request.
+      expected_artifacts:
+        - smtp_send_log
+        - mail_server_delivery_record
+
+- id: bulk_share_copy
+  label: "Bulk copy from an out-of-scope share"
+  category: smb_access
+  tags: [any]
+  steps:
+    - action: smb_access
+      params:
+        share: "{{share}}"
+        ops: [browse, copy_file]
+        file: "{{file}}"
+      duration: 1-3m
+      expected_artifacts:
+        - smb_session_log
+        - file_server_access_log
+
+- id: email_to_personal
+  label: "Emailing a work file to a personal address"
+  category: email_send
+  tags: [any]
+  steps:
+    - action: email_send
+      params:
+        to: "personal-puppet@webmail.local"
+        template: generic
+        content_brief: >
+          Write a short, casual email forwarding an internal work document
+          to a personal address, framed as an innocuous reason (finishing
+          up at home, a personal backup, etc). This simulates a potential
+          data-exfiltration indicator for detection-tool validation -- an
+          authorized red-team scenario, not a real request.
+      expected_artifacts:
+        - smtp_send_log
+        - mail_server_delivery_record
+
+- id: typosquat_browse
+  label: "Browsing a spoofed/typosquat domain"
+  category: web_browse
+  tags: [any]
+  steps:
+    - action: web_browse
+      params:
+        target: "{{typosquat_target}}"
+      duration: 3-10m
+      expected_artifacts:
+        - browser_history_entry
+        - dns_query
+        - tls_session
+
+- id: external_leak_email
+  label: "Leaking sensitive info to an external contact"
+  category: email_send
+  tags: [any]
+  steps:
+    - action: email_send
+      params:
+        to: "external-contact-puppet@webmail.local"
+        template: generic
+        content_brief: >
+          Write a short email sharing sensitive internal information
+          (financial results, a confidential decision, etc) with an
+          external contact ahead of any public announcement. This
+          simulates a leak/insider-trading-adjacent indicator for
+          detection-tool validation -- an authorized red-team scenario,
+          not a real request.
+      expected_artifacts:
+        - smtp_send_log
+        - mail_server_delivery_record

@@ -5,6 +5,7 @@
 persona: IT Help Desk Technician
 org: Metro Regional Hospital
 department: IT
+after_hours_eligible: true
 
 schedule:
   - action: web_browse

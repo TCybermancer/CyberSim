@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberSim orchestrator — ranges</title>
+<script>
+(function () {
+  var t = localStorage.getItem("cybersim-theme");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+<link rel="stylesheet" href="style.css?v=14">
+</head>
+<body>
+<div class="app-shell">
+  <nav class="sidebar">
+    <h1>CyberSim</h1>
+    <a href="./" class="sidebar-link">Dashboard</a>
+    <a id="nav-scenario-builder" href="scenario-builder.html" class="sidebar-link" style="display:none">Build scenario</a>
+    <a id="nav-ranges" href="ranges.html" class="sidebar-link active" style="display:none">Ranges</a>
+    <a id="nav-install" href="install.html" class="sidebar-link" style="display:none">Install agent</a>
+    <a id="nav-users" href="users.html" class="sidebar-link" style="display:none">Users</a>
+    <a id="nav-settings" href="settings.html" class="sidebar-link" style="display:none">Settings</a>
+  </nav>
+  <div class="app-main">
+    <div class="topbar">
+      <button type="button" id="theme-toggle" class="pill pill-unknown">theme: auto</button>
+      <span id="whoami-pill" class="pill pill-unknown"></span>
+      <button type="button" id="logout-btn" class="pill pill-unknown">log out</button>
+    </div>
+
+<main>
+  <section class="col">
+    <div class="card" id="viewer-blocked-card" style="display:none">
+      <p class="hint" style="margin-top:0">Creating or managing ranges requires an admin account. You can still view what's running below.</p>
+    </div>
+
+    <div class="card" id="create-range-card">
+      <h2>Create a range</h2>
+      <p class="hint" style="margin-top:0">
+        A multi-day, business-hours-window exercise: each host below runs its own scenario once
+        per business day for the whole range, instead of a single flat run. See
+        DEVELOPER_NOTES.md "Ranges" for the full mechanics.
+      </p>
+      <form id="range-form">
+        <label>
+          Name
+          <input id="range-name-input" type="text" placeholder="Q3 detection validation" required>
+        </label>
+
+        <div class="row">
+          <label>
+            Start date
+            <input id="range-start-date-input" type="date" required>
+          </label>
+          <label>
+            Number of days
+            <input id="range-num-days-input" type="number" min="1" step="1" value="5" required>
+          </label>
+        </div>
+
+        <div class="row">
+          <label>
+            Window start <span class="hint">(local time)</span>
+            <input id="range-window-start-input" type="time" value="08:00" required>
+          </label>
+          <label>
+            Window end <span class="hint">(local time)</span>
+            <input id="range-window-end-input" type="time" value="16:00" required>
+          </label>
+        </div>
+
+        <label>
+          Timezone <span class="hint">(IANA name)</span>
+          <input id="range-timezone-input" type="text" placeholder="America/Chicago" value="UTC" required>
+        </label>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="range-compressed-toggle">
+          Compressed time scale <span class="hint">(day 0 always fires at its normal calendar time; later days compress toward it, proportionally faster)</span>
+        </label>
+        <div class="row" id="range-time-scale-row" style="display:none">
+          <label>
+            Time scale <span class="hint">(1.0 = real-time; smaller = faster)</span>
+            <input id="range-time-scale-input" type="number" min="0.001" step="any" value="0.1">
+          </label>
+        </div>
+
+        <label>
+          Seed <span class="hint">(optional — omit for a fresh distributional draw every day)</span>
+          <input id="range-seed-input" type="number" placeholder="e.g. 42">
+        </label>
+
+        <label>
+          Injection mode
+          <select id="range-injection-mode-select">
+            <option value="manual">Manual — I'll target specific hosts/days myself</option>
+            <option value="auto">Auto — rare random daily roll</option>
+          </select>
+        </label>
+        <div class="row" id="range-injection-probability-row" style="display:none">
+          <label>
+            Injection probability <span class="hint">(chance per eligible host, per day)</span>
+            <input id="range-injection-probability-input" type="number" min="0" max="1" step="0.01" value="0.05">
+          </label>
+        </div>
+
+        <h2 style="font-size:0.85rem; margin-top:1.1rem">Hosts</h2>
+        <p class="hint" style="margin-top:0">Same scenario every day of the range for each host — the injection system is what varies day to day.</p>
+        <div class="row">
+          <label>
+            Host <span class="hint">(click a known host below to fill this in)</span>
+            <input id="range-host-input" type="text" placeholder="PDA-01">
+          </label>
+          <label>
+            Scenario
+            <select id="range-scenario-org-select"></select>
+          </label>
+        </div>
+        <select id="range-scenario-select"></select>
+        <div id="range-known-hosts" class="chip-row"></div>
+        <button type="button" id="range-add-host-btn">Add host</button>
+
+        <div class="table-scroll" style="margin-top:0.6rem">
+          <table id="range-hosts-table">
+            <thead><tr><th>host</th><th>scenario</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p id="range-hosts-empty" class="hint">No hosts added yet.</p>
+
+        <button type="submit" id="range-submit-btn" style="margin-top:0.8rem">Create range</button>
+      </form>
+      <div id="range-form-result" class="result"></div>
+    </div>
+  </section>
+
+  <section class="col">
+    <div class="card">
+      <h2>Ranges</h2>
+      <div class="table-scroll">
+        <table id="ranges-table">
+          <thead><tr><th>name</th><th>day</th><th>injection</th><th>next fire</th><th></th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="ranges-empty" class="hint">No ranges created yet.</p>
+    </div>
+
+    <div class="card" id="range-detail-card" style="display:none">
+      <div class="card-header">
+        <h2>Range detail <span id="range-detail-name" class="hint"></span></h2>
+      </div>
+
+      <h2 style="font-size:0.85rem">Hosts</h2>
+      <div class="table-scroll">
+        <table id="range-detail-hosts-table">
+          <thead><tr><th>host</th><th>scenario</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h2 style="font-size:0.85rem; margin-top:1rem">Injections so far</h2>
+      <div class="table-scroll">
+        <table id="range-detail-injections-table">
+          <thead><tr><th>day</th><th>host</th><th>behavior</th><th>by</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="range-detail-injections-empty" class="hint">No injections yet.</p>
+
+      <div id="range-add-injection-block" style="display:none">
+        <h2 style="font-size:0.85rem; margin-top:1rem">Add a manual injection</h2>
+        <p class="hint" style="margin-top:0">Graft a specific suspicious_behaviors.yaml entry onto a specific host's specific day — for targeting a particular user's story instead of leaving it to chance.</p>
+        <form id="range-injection-form">
+          <div class="row">
+            <label>
+              Host
+              <select id="injection-host-select"></select>
+            </label>
+            <label>
+              Day <span class="hint">(0-indexed)</span>
+              <input id="injection-day-input" type="number" min="0" step="1" value="0" required>
+            </label>
+          </div>
+          <label>
+            Behavior
+            <select id="injection-behavior-select"></select>
+          </label>
+          <button type="submit" id="injection-submit-btn">Add injection</button>
+        </form>
+        <div id="injection-result" class="result"></div>
+      </div>
+    </div>
+  </section>
+</main>
+  </div>
+</div>
+
+<script src="theme.js?v=1"></script>
+<script src="auth.js?v=4"></script>
+<script src="icons.js?v=1"></script>
+<script src="ranges.js?v=1"></script>
+</body>
+</html>

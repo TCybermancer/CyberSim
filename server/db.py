@@ -176,6 +176,56 @@ CREATE TABLE IF NOT EXISTS settings (
     mail_server_port INTEGER,
     updated_at TEXT NOT NULL
 );
+
+-- Multi-day, business-hours-window "Ranges" -- see scenario_engine.
+-- resolve_window() and app.py's _range_loop. A Range repeats, once per
+-- business day for num_days, a window-filled launch (not a flat
+-- resolve()/schedules-style repeat) against every (host, scenario_name)
+-- pair in range_hosts, optionally grafting one suspicious_behaviors.yaml
+-- entry onto a given host's given day via range_injections.
+CREATE TABLE IF NOT EXISTS ranges (
+    range_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    start_date TEXT NOT NULL,              -- ISO date range day 0 begins, in `timezone`
+    num_days INTEGER NOT NULL,
+    window_start_local TEXT NOT NULL,      -- "08:00"
+    window_end_local TEXT NOT NULL,        -- "16:00"
+    timezone TEXT NOT NULL,                -- IANA name, e.g. "America/Chicago"
+    time_scale REAL NOT NULL DEFAULT 1.0,  -- 1.0 = real-time; <1.0 = compressed (see resolve_window's day-shape docs)
+    injection_mode TEXT NOT NULL CHECK (injection_mode IN ('auto', 'manual')),
+    injection_probability REAL NOT NULL DEFAULT 0.0,  -- only read when injection_mode='auto'
+    seed INTEGER,                          -- NULL = fresh distributional seed per host per day
+    enabled INTEGER NOT NULL DEFAULT 1,    -- also false once current_day_index reaches num_days (done, not just paused)
+    current_day_index INTEGER NOT NULL DEFAULT 0,
+    next_day_launch_at TEXT NOT NULL,      -- when day `current_day_index` should next fire
+    created_at TEXT NOT NULL
+);
+
+-- The (host, persona) pairing for a range's whole run -- one row per
+-- machine, same scenario every day of the range (the injection system,
+-- not this table, is what varies day to day).
+CREATE TABLE IF NOT EXISTS range_hosts (
+    range_id TEXT NOT NULL,
+    host TEXT NOT NULL,
+    scenario_name TEXT NOT NULL,
+    PRIMARY KEY (range_id, host)
+);
+
+-- A suspicious_behaviors.yaml entry grafted onto one host's one day.
+-- created_by='manual': a red-team operator inserted this ahead of time
+-- via POST /ranges/{id}/injections, targeting a specific user's story.
+-- created_by='auto': _range_loop inserted it itself, day-by-day, when
+-- that host/day's injection_probability roll hit.
+CREATE TABLE IF NOT EXISTS range_injections (
+    injection_id TEXT PRIMARY KEY,
+    range_id TEXT NOT NULL,
+    host TEXT NOT NULL,
+    day_index INTEGER NOT NULL,
+    behavior_id TEXT NOT NULL,
+    created_by TEXT NOT NULL CHECK (created_by IN ('auto', 'manual')),
+    params_override TEXT,                  -- JSON dict, or NULL to use suspicious_behaviors.yaml's own substitutions
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -190,16 +240,44 @@ def get_conn():
         conn.close()
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl_type: str):
+    """SQLite has no `ADD COLUMN IF NOT EXISTS` -- guard by checking
+    PRAGMA table_info first, so this stays safe to run against both a
+    fresh DB (where SCHEMA's CREATE TABLE already has the column, so this
+    is a no-op) and an existing one predating the column (where it's a
+    real migration). No external migration framework, consistent with
+    this module's own "zero external dependencies" design goal."""
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+
+
 def init_db():
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        # runs predates Ranges (see "Multi-day, business-hours-window
+        # Ranges" above) -- these columns let the runs list/ledger/scoring
+        # filter by range later without a parallel ledger model. NULL for
+        # every run launched outside a range (the overwhelming majority).
+        _ensure_column(conn, "runs", "range_id", "TEXT")
+        _ensure_column(conn, "runs", "day_index", "INTEGER")
 
 
-def save_run(run_id: str, scenario_name: str, seed: int, started_at: str):
+def save_run(
+    run_id: str,
+    scenario_name: str,
+    seed: int,
+    started_at: str,
+    range_id: str | None = None,
+    day_index: int | None = None,
+):
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO runs (run_id, scenario_name, seed, started_at) VALUES (?, ?, ?, ?)",
-            (run_id, scenario_name, seed, started_at),
+            """
+            INSERT INTO runs (run_id, scenario_name, seed, started_at, range_id, day_index)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, scenario_name, seed, started_at, range_id, day_index),
         )
 
 
@@ -312,7 +390,8 @@ def list_agents() -> list[dict]:
 def list_runs() -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT run_id, scenario_name, seed, started_at FROM runs ORDER BY started_at DESC"
+            "SELECT run_id, scenario_name, seed, started_at, range_id, day_index "
+            "FROM runs ORDER BY started_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -630,3 +709,196 @@ def get_ledger_for_run(run_id: str) -> dict:
         aid: {"spec": spec, "intent": intents.get(aid), "completion": completions.get(aid)}
         for aid, spec in specs.items()
     }
+
+
+# ---- ranges -----------------------------------------------------------
+# See the `ranges`/`range_hosts`/`range_injections` CREATE TABLE comments
+# above and app.py's _range_loop for how these get driven. Mirrors the
+# schedules function set above (save_schedule/list_schedules/
+# due_schedules/update_schedule_after_run/set_schedule_enabled/
+# delete_schedule) one-for-one where the shape matches; day-advance and
+# business-hours/time-scale math live in app.py, same division of
+# responsibility as update_schedule_after_run's next_run_at.
+
+
+def save_range(
+    range_id: str,
+    name: str,
+    start_date: str,
+    num_days: int,
+    window_start_local: str,
+    window_end_local: str,
+    timezone: str,
+    time_scale: float,
+    injection_mode: str,
+    injection_probability: float,
+    seed: int | None,
+    next_day_launch_at: str,
+    created_at: str,
+):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO ranges
+                (range_id, name, start_date, num_days, window_start_local, window_end_local,
+                 timezone, time_scale, injection_mode, injection_probability, seed, enabled,
+                 current_day_index, next_day_launch_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+            """,
+            (
+                range_id,
+                name,
+                start_date,
+                num_days,
+                window_start_local,
+                window_end_local,
+                timezone,
+                time_scale,
+                injection_mode,
+                injection_probability,
+                seed,
+                next_day_launch_at,
+                created_at,
+            ),
+        )
+
+
+def save_range_hosts(range_id: str, host_scenarios: list[tuple[str, str]]):
+    """host_scenarios: list of (host, scenario_name) pairs -- the range's
+    fixed (host, persona) assignment for its whole run."""
+    with get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO range_hosts (range_id, host, scenario_name) VALUES (?, ?, ?)",
+            [(range_id, host, scenario_name) for host, scenario_name in host_scenarios],
+        )
+
+
+def _row_to_range(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["enabled"] = bool(d["enabled"])
+    return d
+
+
+def get_range(range_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM ranges WHERE range_id = ?", (range_id,)).fetchone()
+        return _row_to_range(row) if row else None
+
+
+def list_ranges() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM ranges ORDER BY created_at DESC").fetchall()
+        return [_row_to_range(r) for r in rows]
+
+
+def get_range_hosts(range_id: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT host, scenario_name FROM range_hosts WHERE range_id = ? ORDER BY host", (range_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def due_ranges(now: str) -> list[dict]:
+    """Enabled ranges whose next_day_launch_at has already arrived -- what
+    app.py's _range_loop fires on each poll tick, same role as
+    due_schedules() plays for flat recurring schedules."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ranges WHERE enabled = 1 AND next_day_launch_at <= ?", (now,)
+        ).fetchall()
+        return [_row_to_range(r) for r in rows]
+
+
+def update_range_after_day(range_id: str, next_day_launch_at: str, current_day_index: int, enabled: bool):
+    """current_day_index is the day that was JUST attempted (or is about
+    to be, per the caller); enabled=False once current_day_index reaches
+    num_days marks the range done, not just paused -- distinguishable
+    from a manual pause via current_day_index >= num_days if that ever
+    matters to a caller."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE ranges SET next_day_launch_at = ?, current_day_index = ?, enabled = ? WHERE range_id = ?",
+            (next_day_launch_at, current_day_index, 1 if enabled else 0, range_id),
+        )
+
+
+def set_range_enabled(range_id: str, enabled: bool) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE ranges SET enabled = ? WHERE range_id = ?", (1 if enabled else 0, range_id)
+        )
+        return cur.rowcount > 0
+
+
+def delete_range(range_id: str) -> bool:
+    """No FK cascade declared on these tables (consistent with the rest
+    of this schema -- see e.g. schedules), so clean up range_hosts/
+    range_injections explicitly rather than leaving them orphaned."""
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM ranges WHERE range_id = ?", (range_id,))
+        deleted = cur.rowcount > 0
+        if deleted:
+            conn.execute("DELETE FROM range_hosts WHERE range_id = ?", (range_id,))
+            conn.execute("DELETE FROM range_injections WHERE range_id = ?", (range_id,))
+        return deleted
+
+
+def get_range_injection(range_id: str, host: str, day_index: int) -> dict | None:
+    """Looked up by _range_loop before deciding whether to auto-roll an
+    injection for this host/day -- a manual-mode row inserted ahead of
+    time here means auto mode must not also roll (and overwrite) one."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM range_injections WHERE range_id = ? AND host = ? AND day_index = ?",
+            (range_id, host, day_index),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["params_override"] = json.loads(d["params_override"]) if d["params_override"] else None
+        return d
+
+
+def save_range_injection(
+    injection_id: str,
+    range_id: str,
+    host: str,
+    day_index: int,
+    behavior_id: str,
+    created_by: str,
+    params_override: dict | None,
+    created_at: str,
+):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO range_injections
+                (injection_id, range_id, host, day_index, behavior_id, created_by, params_override, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                injection_id,
+                range_id,
+                host,
+                day_index,
+                behavior_id,
+                created_by,
+                json.dumps(params_override) if params_override else None,
+                created_at,
+            ),
+        )
+
+
+def list_range_injections(range_id: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM range_injections WHERE range_id = ? ORDER BY day_index ASC, host ASC",
+            (range_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["params_override"] = json.loads(d["params_override"]) if d["params_override"] else None
+            result.append(d)
+        return result

@@ -292,11 +292,157 @@ Matching by host + time window depends on actions actually being spread
 out in real execution time the way their `intended_start` implies --
 `db.pending_actions_for_host()` now enforces that (see below).
 
+## Ranges (multi-day, business-hours-window scheduling)
+
+`POST /runs` and `/schedules` both model a single scenario running once
+(or on a flat repeat interval) from one `start_time` -- `resolve()`
+(`scenario_engine.py`) is a flat, per-host cumulative cursor walk with no
+concept of a day, business hours, or a calendar, and a scenario's total
+span is only ~30-90 minutes (sampled once). That's fine for a single
+demo run, but doesn't fit a real multi-machine range meant to run for
+several actual business days: a 25-host range launched this way would
+mean 25 guaranteed red flags on day one (every scenario file bakes in
+exactly one `should_alert: true` step) and nothing resembling a normal
+office day the rest of the time.
+
+**Ranges** (`ranges`/`range_hosts`/`range_injections` tables in `db.py`,
+`POST /ranges` etc. in `app.py`, `scenario_engine.resolve_window()`) are
+a second, additive orchestration layer for that case -- `resolve()` and
+the one-shot/flat-repeat paths are completely unchanged and still exist
+for quick single-run testing.
+
+- **`resolve_window()`** spreads a scenario's own steps across a
+  business-hours window (`window_start`/`window_end`) for one day,
+  instead of `resolve()`'s flat cumulative walk -- `_spread_steps()`
+  divides the window into slots (one per step) and jitters each step's
+  `delay_before`-derived offset within its slot, filling the whole day
+  rather than clustering everything in the first hour. It's factored out
+  specifically so a different "duty day shape" (weighted toward
+  mornings, a lunch gap, per-role pacing) can replace it later without
+  `resolve_window()`'s own signature changing -- nothing beyond
+  `_spread_steps()` needs to know the difference.
+- Critically, `resolve_window()` **ignores a scenario file's own
+  `should_alert: true` step** -- carrying it through would mean every
+  Range day is flagged regardless of the injection system below,
+  defeating the entire point of moving off `resolve()`'s "always fires"
+  model. Under `resolve_window`, a day is flagged if and only if an
+  injection says so.
+- **Injections** (`server/suspicious_behaviors.yaml`): a small library of
+  composable, persona-agnostic "something's wrong today" behaviors
+  (Googling something suspicious, IT pulling R&D secrets over SMB,
+  staging a hidden local copy before emailing it out, etc.), each just a
+  `steps:` list in the same shape as a scenario's own schedule steps.
+  `resolve_window()` grafts a given behavior's steps in as their own
+  contiguous mini cursor-walk anchored at a random point in the window --
+  a chained narrative (stage, then exfil 30-90 minutes later) stays one
+  continuous story rather than getting scattered independently. Every
+  injected step is forced `should_alert=True` regardless of what the
+  library entry itself sets. `{{name}}` placeholders in a step's params
+  (`{{share}}`, or embedded like `...?q={{query}}`) get filled from a
+  small built-in bank (`_DEFAULT_SUBSTITUTIONS`) or an override dict,
+  substituted via regex so both a bare-placeholder value and one embedded
+  in a larger string work.
+- **Two ways a day gets an injection**, both landing in the same
+  `range_injections` table so downstream handling doesn't care which:
+  - `injection_mode: "manual"` -- a red-team operator picks an exact
+    host/day/behavior ahead of time via `POST /ranges/{id}/injections`,
+    for when they already have a specific user's story in mind and want
+    to target/ad-lib around it rather than leave it to chance.
+  - `injection_mode: "auto"` -- `_maybe_auto_inject()` rolls
+    `injection_probability` fresh each host/day in `_range_loop`, and on
+    a hit picks a random tag-matching library entry (`tags: [any]`, or a
+    persona name) and persists it the same way a manual injection would
+    be -- so a later tick's lookup finds it and doesn't re-roll on top of
+    itself. Uses plain `random`, not `scenario_engine`'s seeded rng:
+    whether today has an incident at all is a range-loop policy decision,
+    not part of `resolve_window()`'s deterministic-replay contract.
+- **`after_hours_eligible: true`** (a new, otherwise-inert top-level
+  scenario YAML field, same precedent as `org`/`department`) widens the
+  *base* schedule's effective window by `AFTER_HOURS_EARLY_BUFFER`/
+  `AFTER_HOURS_LATE_BUFFER` (2h/4h) for IT/sysadmin/network/devops/cloud-
+  infra and CEO-flavored personas -- their normal job just doesn't keep
+  strict 9-5 hours. This does **not** gate an injected step's placement:
+  an injection is always allowed to land past `window_end` regardless of
+  eligibility, since insider-threat exfil realistically happens late for
+  any persona, not just the ones whose day already runs long.
+- **`_range_loop()`** (`app.py`) is the same lightweight asyncio poll
+  loop shape as `_scheduler_loop`, firing `db.due_ranges()` every 15s, and
+  reuses `db.active_runs_for_hosts()`/the exact same busy-host guard --
+  but at **per-host**, not per-range, granularity: a stuck/offline agent
+  only costs itself missed days (`_fire_range_day` just skips launching
+  for that host this tick), never the other 24 hosts in the same range.
+  The day cursor (`ranges.current_day_index`/`next_day_launch_at`)
+  advances unconditionally once every host's been attempted, so one dead
+  host can't stall the whole range's progression.
+- **`day_index` counts consecutive calendar days**, not business days --
+  weekends aren't skipped in this first pass. Backward-compatible follow-
+  up if wanted: it only changes how `day_index` maps to a calendar date
+  in `_day_window_utc()`, not anything about how a day's window itself
+  gets resolved.
+- **`time_scale`** (1.0 = real-time, the default; <1.0 compresses)
+  is applied in `_day_window_utc()`: day 0 always launches at its own
+  literal calendar moment, completely unaffected by `time_scale` -- a
+  range's first day fires exactly when you'd expect no matter how
+  compressed the rest of it is. Every later day's distance from day 0 --
+  both the gap between days (nights, weekends) and each day's own
+  within-day span -- gets multiplied by `time_scale`, so the whole range
+  plays out faster while every day keeps its relative position/duration
+  proportional to the others. At `time_scale=1.0` this is the identity
+  for every day (real == logical always), which is what makes it a safe,
+  backward-compatible addition -- every uncompressed range behaves
+  exactly as it did before `time_scale` existed, no special-casing
+  required. `_logical_day_window()` computes the un-scaled "what hour of
+  an 8-4 day is this" window `_day_window_utc()` scales from.
+- **Seeding**: a range-level `seed` (nullable, same "NULL = fresh
+  distributional draw" convention as `schedules.seed`) is deterministically
+  fanned out per (host, day) via `_day_seed()` (`zlib.crc32` over
+  `f"{base_seed}:{host}:{day_index}"` -- not Python's built-in `hash()`,
+  which is randomized per-process unless `PYTHONHASHSEED` is pinned, and
+  would silently break replay across a server restart mid-range) so a
+  seeded range is fully reproducible without every day being a byte-
+  identical repeat of day 1.
+- **`zoneinfo`/`tzdata`**: `_day_window_utc()` converts a range's
+  configured local window + IANA timezone into naive UTC (this
+  codebase's convention throughout). Windows never ships an IANA tz
+  database, and some minimal Linux images don't either -- `tzdata` is now
+  a real `requirements.txt` dependency so `ZoneInfo("UTC")` etc. resolve
+  everywhere regardless of the host OS; harmless extra weight on a host
+  that already has system tzdata. Caught this for real running the test
+  suite locally on Windows before it became a requirements.txt line.
+- **Runs launched by a Range are ordinary runs** -- `db.save_run()` just
+  gets optional `range_id`/`day_index` tags (nullable columns added to
+  the pre-existing `runs` table via a `PRAGMA table_info`-guarded
+  migration in `init_db()`, since SQLite has no `ADD COLUMN IF NOT
+  EXISTS`). The existing runs list, ledger view, and `scoring/` all keep
+  working completely unmodified against a Range's daily runs -- no
+  parallel ledger model needed.
+- **Dashboard UI**: `server/static/ranges.html`/`ranges.js` -- create a
+  range (name, dates, window, timezone, time-scale toggle, injection
+  mode), a host/scenario assignment builder reusing the same org->
+  scenario cascade and known-hosts chips as the main launch form, a
+  ranges list with pause/resume/cancel (mirrors the schedules table), and
+  a detail view (hosts, injections so far, an add-manual-injection form
+  when applicable). Self-contained script, same no-framework/no-build-
+  step convention as every other page in `server/static/`. Covered by
+  `server/tests/test_ranges.py` (API/engine layer -- 34 tests) and
+  `server/tests/test_scenario_engine.py`'s `resolve_window` coverage (17
+  tests); the UI itself was verified by hand against a live server
+  (`POST /ranges` round-tripping through the exact payload shape
+  `ranges.js` builds, correct timezone math, static files serving
+  correctly) rather than an automated browser test, consistent with how
+  this project hand-verifies things a unit test can't reach (see
+  "Testing" below).
+
 ## What's stubbed vs. what's real
 
 **Real / functional as-is:**
 - FastAPI server, SQLite ledger, poll/dispatch loop
 - Seeded scenario resolution (deterministic and distributional)
+- Ranges (multi-day, business-hours-window scheduling, manual and
+  auto-mode suspicious-activity injection, real-time and compressed
+  `time_scale`) — API/engine layer and dashboard UI
+  (`server/static/ranges.html`/`ranges.js`) both fully functional and
+  tested; see "Ranges" above for what it does and how.
 - Agent registration/poll/report loop, OOB source-binding
 - Ansible playbook structure for Linux/Windows/AD provisioning
 - `agent/actions/email_send.py` — real `smtplib` delivery, with subject
@@ -591,6 +737,9 @@ these files:**
    joining Linux to the same AD domain (sssd/realmd, `community.general.
    realm_membership` or equivalent) is different enough work to be its
    own follow-up, not built here.
+8. Ranges' `day_index` counts consecutive calendar days, not business
+   days -- weekends aren't skipped in this first pass (see "Ranges"
+   above).
 
 ## Running the prototype locally (single machine, no real OOB yet)
 
