@@ -191,14 +191,19 @@ team to actually work against. Two things fix that, run in this order:
    the other classic tell (broad enumeration, not routine service use).
 
 2. **`add_windows_user.yml`**: now domain-joins the Windows host by
-   default (`domain_join: true`) via `ansible.windows.win_domain_membership`
-   + a reboot when required, and creates the puppet persona as a real AD
-   user (`OU=Puppets,OU=CyberSim,...`) rather than a same-named-but-
-   different-SID local account -- that's what the host actually logs on
-   as, so there's a genuine Kerberos logon session behind it rather than
-   just a look-alike. The resulting computer object gets moved from AD's
-   default `CN=Computers` into `OU=Workstations,OU=CyberSim,...` to keep
-   the tree meaningful. `create_local_account: true` still creates a
+   default (`domain_join: true`) via `microsoft.ad.membership` (not
+   `ansible.windows.win_domain_membership` -- that module was removed in
+   `ansible.windows` 3.0.0+, and `requirements.yml` pins it as `>=2.0.0`
+   with no upper bound, so a fresh collection install would silently pull
+   a version that no longer has it), with `reboot: true` handling the
+   post-join reboot automatically, and creates the puppet persona as a
+   real AD user (`OU=Puppets,OU=CyberSim,...`) rather than a same-named-
+   but-different-SID local account -- that's what the host actually logs
+   on as, so there's a genuine Kerberos logon session behind it rather
+   than just a look-alike. The computer object lands directly in
+   `OU=Workstations,OU=CyberSim,...` via `microsoft.ad.membership`'s
+   `domain_ou_path` at join time -- no separate post-join "move it" step
+   needed. `create_local_account: true` still creates a
    plain local Windows account alongside (or instead of, with
    `domain_join: false`) the domain identity -- the pre-existing behavior
    is fully preserved behind that toggle, it's just no longer the
@@ -219,6 +224,15 @@ team to actually work against. Two things fix that, run in this order:
    `add_linux_user.yml` is unchanged. Realm-joining Linux (sssd/realmd)
    is a different enough problem to be its own piece of work; see "Still
    stubbed" below.
+
+   Every `microsoft.ad.*` parameter shape used above (`spn: {set: [...]}`,
+   `attributes: {set: {msDS-SupportedEncryptionTypes: N}}` as a bare int,
+   `microsoft.ad.membership`'s `domain_ou_path`/`reboot`, `name`+`path`
+   without `identity` being the documented idempotent lookup for
+   newly-created objects) has been checked against the collection's
+   current published docs -- not just guessed. What hasn't happened yet
+   is an actual run against a real DC/collection install -- that's the
+   next real test of this.
 
 ## Determinism for validation
 
@@ -572,7 +586,7 @@ these files:**
    than was worth building for the initial suite. Those paths stay
    hand-verified for now (see each action module's entry above).
 7. Linux puppet hosts aren't domain-joined -- only Windows hosts get the
-   `win_domain_membership` treatment in `add_windows_user.yml` (see
+   `microsoft.ad.membership` treatment in `add_windows_user.yml` (see
    "Enterprise structure and puppet-host domain-join" above). Realm-
    joining Linux to the same AD domain (sssd/realmd, `community.general.
    realm_membership` or equivalent) is different enough work to be its

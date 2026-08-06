@@ -6,13 +6,15 @@
 # anything AD-aware happening in the range (e.g. a red team Kerberoasting
 # the service accounts build_enterprise_structure.yml provisions -- see
 # that playbook and DEVELOPER_NOTES.md). Requires WinRM configured on
-# targets, and the `ansible.windows` / `microsoft.ad` collections
-# installed on the control node:
+# targets, and the `microsoft.ad` collection installed on the control
+# node:
 #   ansible-galaxy collection install ansible.windows microsoft.ad
 #
 # Run build_enterprise_structure.yml first -- this playbook places the new
-# AD user object and (post-join) computer object into the OU tree it
-# creates.
+# AD user object into the OU tree it creates, and joins the host's
+# computer object straight into that tree's Workstations OU (via
+# microsoft.ad.membership's domain_ou_path -- no separate "move it after
+# the fact" step needed).
 #
 # All WinRM traffic here rides the OOB NIC -- inventory.ini's
 # windows_hosts and domain_controller groups should resolve to OOB IPs
@@ -72,21 +74,32 @@
     # domain_join_user / domain_join_password come from group_vars/all/vars.yml
     # (-> vault_domain_join_user/password), same indirection as esxi_password
     # etc. -- see group_vars/all/vars.yml.example.
+    #
+    # Derived from domain_name (e.g. lab.local -> DC=lab,DC=local) rather
+    # than a hard-coded domain -- the old CyberSimPuppets default assumed
+    # DC=corp,DC=local regardless of what domain was actually promoted.
+    domain_dn: "{{ domain_name.split('.') | map('regex_replace', '^(.*)$', 'DC=\\1') | join(',') }}"
+    ad_computer_ou: "OU=Workstations,OU=CyberSim,{{ domain_dn }}"
 
   tasks:
-    - name: Join the host to the domain
-      ansible.windows.win_domain_membership:
+    - name: Join the host to the domain (and place its computer object)
+      # microsoft.ad.membership, not ansible.windows.win_domain_membership
+      # -- that module was removed in ansible.windows 3.0.0+ (this repo's
+      # requirements.yml pins ">=2.0.0" with no upper bound, so a fresh
+      # install would silently pull a version where it no longer exists).
+      # domain_ou_path drops the computer object straight into
+      # OU=Workstations at join time -- confirmed against the module's
+      # current docs -- so there's no separate post-join "move it" task
+      # needed here (unlike the AD *user* object below, which
+      # microsoft.ad.membership has no equivalent of).
+      microsoft.ad.membership:
         dns_domain_name: "{{ domain_name }}"
         domain_admin_user: "{{ domain_join_user }}"
         domain_admin_password: "{{ domain_join_password }}"
+        domain_ou_path: "{{ ad_computer_ou }}"
         state: domain
+        reboot: true
       when: domain_join
-      register: domain_join_result
-
-    - name: Reboot after a domain-join that requires it
-      ansible.windows.win_reboot:
-        reboot_timeout: 600
-      when: domain_join and domain_join_result.reboot_required
 
     - name: Ensure a local puppet user also exists (create_local_account=true)
       ansible.windows.win_user:
@@ -98,19 +111,15 @@
         description: "cybersim puppet ({{ target_persona }})"
       when: create_local_account
 
-- name: Create the puppet persona's AD identity, and place the computer object
+- name: Create the puppet persona's AD user identity
   hosts: domain_controller
   vars:
     target_user: "changeme"
     target_persona: "generic"
     target_password: "changeme"
     domain_join: true
-    # Derived from domain_name (e.g. lab.local -> DC=lab,DC=local) rather
-    # than a hard-coded domain -- the old CyberSimPuppets default assumed
-    # DC=corp,DC=local regardless of what domain was actually promoted.
     domain_dn: "{{ domain_name.split('.') | map('regex_replace', '^(.*)$', 'DC=\\1') | join(',') }}"
     ad_ou: "OU=Puppets,OU=CyberSim,{{ domain_dn }}"
-    ad_computer_ou: "OU=Workstations,OU=CyberSim,{{ domain_dn }}"
 
   tasks:
     - name: Ensure the puppet persona's AD user account exists
@@ -123,16 +132,3 @@
         description: "cybersim puppet ({{ target_persona }})"
         state: present
       when: domain_join
-
-    - name: Move each newly-joined computer object into OU=Workstations
-      # Runs against the DC (this play's hosts:), managing one computer
-      # object per Windows host this invocation joined -- not delegated to
-      # those hosts themselves, since microsoft.ad.computer manages AD
-      # objects from wherever the AD module/RSAT tools are (the DC), the
-      # same way the AD user task above does.
-      microsoft.ad.computer:
-        name: "{{ item }}"
-        path: "{{ ad_computer_ou }}"
-        state: present
-      when: domain_join
-      loop: "{{ groups['windows_hosts'] }}"

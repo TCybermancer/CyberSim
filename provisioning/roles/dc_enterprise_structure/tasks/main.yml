@@ -87,10 +87,12 @@
     enabled: true
     spn:
       set: "{{ item.spn }}"
-    # microsoft.ad.user's spn parameter shape (set/add/remove list vs. a
-    # bare list) varies by collection version -- confirm against
-    # `ansible-doc microsoft.ad.user` for whatever version requirements.yml
-    # actually resolves before relying on this in a real run.
+    # spn: {set: [...]} and attributes: {set: {msDS-SupportedEncryptionTypes: N}}
+    # (bare int, no type/value wrapper needed) both confirmed against the
+    # current microsoft.ad.user docs -- see
+    # https://docs.ansible.com/projects/ansible/latest/collections/microsoft/ad/user_module.html.
+    # Not yet exercised against a real DC/collection install, though --
+    # still worth a first live run before trusting it unattended.
     #
     # Left unset (rather than forced AES-only) on weak: true accounts, so
     # the KDC still honors RC4 for them -- see the role header comment.
