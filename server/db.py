@@ -124,8 +124,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- Remote Install tab), configured once and reused for every remote
 -- install rather than typed per-request. Same plaintext-at-rest
 -- disclaimer as the LLM API keys above. SSH (Linux) prefers a private
--- key, matching provisioning/inventory.ini.example's existing
--- convention, but also accepts a password as a fallback for hosts set
+-- key -- the same convention range-provisioning inventories document --
+-- but also accepts a password as a fallback for hosts set
 -- up without a deployed key (remote_install.py tries the key first if
 -- both are set). WinRM (Windows) is password-only since NTLM-transport
 -- WinRM doesn't do public-key auth.

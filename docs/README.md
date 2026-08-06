@@ -202,10 +202,10 @@ IP); left blank, it falls back to the admin's own request address,
 which is fine for same-machine/loopback testing but not general use.
 SSH connects over whichever of a private key or password is configured
 (key tried first if both are set); WinRM tries HTTPS/5986 first
-(matching `provisioning/inventory.ini.example`'s convention), then
-falls back to plain HTTP/5985 -- the far more common actual default,
-since `Enable-PSRemoting` on a plain Windows box doesn't set up an
-HTTPS listener unless someone explicitly configured one.
+(matching the WinRM-over-HTTPS convention range-provisioning inventories
+document), then falls back to plain HTTP/5985 -- the far more common
+actual default, since `Enable-PSRemoting` on a plain Windows box doesn't
+set up an HTTPS listener unless someone explicitly configured one.
 
 ### Auth
 
@@ -360,9 +360,9 @@ this, worth knowing if you touch `cybersim-agent.iss`:
   even though nothing else about the setup was restricted. Whether
   that's this specific machine's policy or a general Windows constraint
   on that trigger type wasn't fully isolated -- but `PrivilegesRequired=
-  admin` in the `.iss` sidesteps it either way, and matches the existing
-  Ansible provisioning's own elevated pattern (`become: true` / admin
-  WinRM) for puppet host setup regardless.
+  admin` in the `.iss` sidesteps it either way, and matches the range-
+  provisioning tooling's own elevated pattern (`become: true` / admin
+  WinRM) for puppet host setup regardless (see `CyberSim-Range-Infra`).
 
 **Rebuilding the agent installer by hand** (after any agent code change,
 if you're not relying on CI -- see "CI / Releases" below for the
