@@ -9,7 +9,10 @@ import os
 
 import pytest
 
-from actions.web_browse import _ensure_playwright_browsers_path
+from actions.web_browse import (
+    _ensure_playwright_browsers_path,
+    _installed_windows_browser_channel,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -33,3 +36,22 @@ def test_sets_a_default_shared_cache_path_when_unset():
     value = os.environ["PLAYWRIGHT_BROWSERS_PATH"]
     assert value
     assert value.replace("\\", "/").rstrip("/").endswith("ms-playwright")
+
+
+def test_detects_installed_chrome_on_windows(monkeypatch, tmp_path):
+    chrome = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
+    chrome.parent.mkdir(parents=True)
+    chrome.touch()
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+    monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
+
+    assert _installed_windows_browser_channel() == "chrome"
+
+
+def test_returns_none_when_no_system_browser_is_installed(monkeypatch, tmp_path):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+    monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
+
+    assert _installed_windows_browser_channel() is None
