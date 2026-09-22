@@ -3,11 +3,13 @@ Runs under LibreOffice's OWN bundled Python interpreter (invoked as a
 subprocess by office_doc.py -- see that module's docstring for why this
 can't just be imported and called from the agent's normal venv).
 
-Uses officehelper.bootstrap() -- shipped with LibreOffice itself, next to
-uno.py -- to launch a headless soffice instance and connect to it, with
-built-in retry/backoff. Opens (or creates) the target document, performs
-the requested ops, hashes the file before/after, saves, closes, and
-cleanly terminates the office process it started.
+Uses its own _owned_bootstrap() (not LibreOffice's shipped
+officehelper.bootstrap(), which this replaced) to launch a headless
+soffice instance against a private, uniquely-named pipe and connect to
+it, polling for the UNO connection with a bounded deadline and tearing
+the process down on any failure path. Opens (or creates) the target
+document, performs the requested ops, hashes the file before/after,
+saves, closes, and cleanly terminates the office process it started.
 
 Prints a fixed marker line followed by one line of JSON so the parent
 process can find the result even if pyuno/soffice logged other noise to

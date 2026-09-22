@@ -356,17 +356,16 @@ for quick single-run testing.
   `office_doc.py` runs the real automation as a subprocess under
   LibreOffice's *own* `python[.exe]` (`office:` block in `config.yaml`
   points at both `soffice_path` and, optionally, `bundled_python_path`),
-  using LibreOffice's own shipped `officehelper.bootstrap()` to launch a
-  headless instance and connect. Opens the target document (creating a
-  fresh one from the app's factory if it doesn't exist yet), edits a
-  cell/inserts text, holds it open+dirty for `duration_seconds` like a
-  real user working on it, saves, closes, and cleanly terminates the
-  office process. Returns real SHA-256 hashes before/after. One gotcha
-  hit while building this: `officehelper.bootstrap()` only quotes its
-  *own* auto-detected `soffice` path for `shell=True`, not a
-  caller-supplied one — a path with a space (`C:\Program Files\...`)
-  needs quoting yourself before passing it in, or the space splits the
-  command. Verified locally end-to-end (installed LibreOffice via
+  using `_uno_worker.py`'s own `_owned_bootstrap()` (not LibreOffice's
+  shipped `officehelper.bootstrap()`, which this replaced -- see that
+  module's docstring) to launch a headless instance against a private,
+  uniquely-named pipe, polling for the UNO connection with a bounded
+  deadline and tearing the process down on any failure path instead of
+  leaking it. Opens the target document (creating a fresh one from the
+  app's factory if it doesn't exist yet), edits a cell/inserts text,
+  holds it open+dirty for `duration_seconds` like a real user working on
+  it, saves, closes, and cleanly terminates the office process. Returns
+  real SHA-256 hashes before/after. Verified locally end-to-end (installed LibreOffice via
   `winget` for this): real `soffice.bin` process launch, real `.xlsx`
   file created and then re-edited with a changed hash on a second run,
   clean process shutdown (no orphaned `soffice.bin`), and a clean
@@ -596,31 +595,25 @@ these files:**
    auth.py) -- no finer-grained permissions (e.g. an operator who can
    launch runs but not manage other accounts) and no audit log of who
    did what. Fine for a small team; revisit if that stops being true.
-3. Config templating in the Ansible playbooks (currently a TODO comment
-   — needs to render `config.yaml` per-host with the right OOB IP). Linux
-   puppet hosts are provisioned this way (Ansible + systemd, no packaged
-   binary) rather than via an installer — only the Windows side got a
-   PyInstaller/Inno Setup treatment, matching what was actually asked
-   for; a Linux equivalent wasn't built.
-4. `smb_access.py`'s Linux `mount.cifs` path is implemented per the
+3. `smb_access.py`'s Linux `mount.cifs` path is implemented per the
    documented interface but has never been run — verify on a real Linux
    puppet host before trusting it.
-5. Second-source verification: cross-checking each action module's
+4. Second-source verification: cross-checking each action module's
    artifact (email Message-ID, file hash, browser history entry, SMB
    access) against the *target* system's own log (mail server delivery
    log, file server access log, etc.), not just the agent's own report of
    what it did. Natural to build as part of the scoring harness's alert
    ingestion once real range infrastructure is in the loop.
-6. The automated test suite (see "Testing" below) doesn't cover actually
+5. The automated test suite (see "Testing" below) doesn't cover actually
    driving a real browser, LibreOffice, or SMB share -- CI would need a
    real LibreOffice install, a downloaded Chromium, and a real or
    loopback SMB share to exercise those, which is a heavier CI setup
    than was worth building for the initial suite. Those paths stay
    hand-verified for now (see each action module's entry above).
-7. Ranges' `day_index` counts consecutive calendar days, not business
+6. Ranges' `day_index` counts consecutive calendar days, not business
    days -- weekends aren't skipped in this first pass (see "Ranges"
    above).
-8. Update checking (`GET /updates/check`) only *reports* that a newer
+7. Update checking (`GET /updates/check`) only *reports* that a newer
    version exists -- there's no push-update mechanism for agents (an
    outdated one still needs a manual reinstall or Remote Install re-run)
    or auto-apply for the server (`server/update.sh` is still a command

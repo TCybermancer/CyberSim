@@ -9,11 +9,11 @@ libpyuno.so on Linux) is a compiled extension built against LibreOffice's
 own bundled Python interpreter (LibreOffice/program/python[.exe]) -- it
 will not import under the agent's own venv/system Python (different
 build, different ABI; confirmed by hand while building this). So this
-module launches the real automation (_uno_worker.py, which uses
-LibreOffice's own officehelper.bootstrap() to start soffice and connect)
-*as a subprocess under LibreOffice's bundled Python*, and parses its
-JSON result back. This is the standard way to drive UNO from a process
-that isn't itself running inside LibreOffice's interpreter.
+module launches the real automation (_uno_worker.py, which owns its
+soffice process's full lifecycle -- see that module's docstring) *as a
+subprocess under LibreOffice's bundled Python*, and parses its JSON
+result back. This is the standard way to drive UNO from a process that
+isn't itself running inside LibreOffice's interpreter.
 
 Config (agent config.yaml, `office:` block):
     soffice_path          path to soffice(.exe); default "soffice",
