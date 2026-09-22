@@ -2,7 +2,7 @@
 See docs/README.md "Determinism for validation" for why byte-identical
 replay from a seed matters here."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -421,3 +421,97 @@ def test_share_and_shares_category_together_raises():
     start = datetime(2026, 1, 1, 12, 0, 0)
     with pytest.raises(ValueError, match="both 'share' and 'shares_category"):
         resolve(scenario, ["HOST-A"], start, seed=1)
+
+
+# --- repeat (resolve_window's per-day action-volume expansion) ---------
+
+REPEAT_SCENARIO = {
+    "persona": "test_persona",
+    "schedule": [
+        {
+            "action": "web_browse",
+            "repeat": "20-20",
+            "targets": ["http://a", "http://b", "http://c"],
+            "duration": "1-2m",
+        },
+        {"action": "email_send", "delay_before": "0-0s", "params": {"to": "x@corp.local"}},
+    ],
+}
+
+
+def test_repeat_expands_step_into_that_many_action_specs():
+    start = datetime(2026, 1, 5, 8, 0, 0)
+    end = datetime(2026, 1, 5, 16, 0, 0)
+    _, _, specs = resolve_window(REPEAT_SCENARIO, ["HOST-A"], start, end, seed=1)
+
+    web_browse_specs = [s for s in specs if s.action_type == ActionType.WEB_BROWSE]
+    other_specs = [s for s in specs if s.action_type != ActionType.WEB_BROWSE]
+    assert len(web_browse_specs) == 20  # fixed 20-20 range
+    assert len(other_specs) == 1  # unaffected, no repeat field
+
+
+def test_repeat_range_samples_within_bounds():
+    scenario = {
+        "persona": "p",
+        "schedule": [{"action": "web_browse", "repeat": "5-10", "targets": ["http://a"]}],
+    }
+    start = datetime(2026, 1, 5, 8, 0, 0)
+    end = datetime(2026, 1, 5, 16, 0, 0)
+    for seed in range(20):
+        _, _, specs = resolve_window(scenario, ["HOST-A"], start, end, seed=seed)
+        assert 5 <= len(specs) <= 10
+
+
+def test_repeat_is_deterministic_for_a_given_seed():
+    start = datetime(2026, 1, 5, 8, 0, 0)
+    end = datetime(2026, 1, 5, 16, 0, 0)
+    _, _, specs1 = resolve_window(REPEAT_SCENARIO, ["HOST-A"], start, end, seed=7)
+    _, _, specs2 = resolve_window(REPEAT_SCENARIO, ["HOST-A"], start, end, seed=7)
+
+    assert [s.params.get("target") for s in specs1] == [s.params.get("target") for s in specs2]
+    assert [s.intended_start for s in specs1] == [s.intended_start for s in specs2]
+
+
+def test_repeated_step_still_independently_randomizes_its_target():
+    # Not just more copies of the same action -- each repeat should re-roll
+    # its own target pick, same as a targets_category step would.
+    start = datetime(2026, 1, 5, 8, 0, 0)
+    end = datetime(2026, 1, 5, 16, 0, 0)
+    _, _, specs = resolve_window(REPEAT_SCENARIO, ["HOST-A"], start, end, seed=1)
+
+    targets_hit = {s.params["target"] for s in specs if s.action_type == ActionType.WEB_BROWSE}
+    assert targets_hit == {"http://a", "http://b", "http://c"}  # all 3 options actually got hit across 20 repeats
+
+
+def test_repeated_steps_are_spread_across_the_day_not_clustered():
+    start = datetime(2026, 1, 5, 8, 0, 0)
+    end = datetime(2026, 1, 5, 16, 0, 0)
+    _, _, specs = resolve_window(REPEAT_SCENARIO, ["HOST-A"], start, end, seed=1)
+
+    web_browse_starts = sorted(s.intended_start for s in specs if s.action_type == ActionType.WEB_BROWSE)
+    # First and last repeated action should span a meaningful chunk of the
+    # 8-hour window, not all sit within the same few minutes.
+    assert (web_browse_starts[-1] - web_browse_starts[0]) > timedelta(hours=4)
+
+
+def test_no_repeat_field_fires_exactly_once():
+    scenario = {
+        "persona": "p",
+        "schedule": [{"action": "web_browse", "targets": ["http://a"]}],
+    }
+    start = datetime(2026, 1, 5, 8, 0, 0)
+    end = datetime(2026, 1, 5, 16, 0, 0)
+    _, _, specs = resolve_window(scenario, ["HOST-A"], start, end, seed=1)
+    assert len(specs) == 1
+
+
+def test_resolve_ignores_repeat_field():
+    # repeat is a resolve_window()-only concept (see _expand_repeats's
+    # docstring) -- the flat one-shot resolve() path doesn't look for it
+    # at all, same as it doesn't look for after_hours_eligible.
+    scenario = {
+        "persona": "p",
+        "schedule": [{"action": "web_browse", "repeat": "20-20", "targets": ["http://a"]}],
+    }
+    _, _, specs = resolve(scenario, ["HOST-A"], datetime(2026, 1, 1, 12), seed=1)
+    assert len(specs) == 1

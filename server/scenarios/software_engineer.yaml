@@ -7,18 +7,29 @@ org: Vantage Corp
 department: Engineering
 
 schedule:
+  # Ambient, high-frequency steps: repeat fires this step that many times
+  # across the day (resolve_window()/Ranges only -- see
+  # scenario_engine._expand_repeats()), each instance independently
+  # spread across the business-hours window and, for a targets_category
+  # step, independently re-rolling its own random pick. This is what
+  # makes a duty day look like someone actually sitting at a computer
+  # for 8 hours instead of ~5 scattered actions -- see "repeat" in
+  # DEVELOPER_NOTES.md. The should_alert step below deliberately has no
+  # repeat: a repeated "true positive" would drown its own signal.
   - action: web_browse
+    repeat: 8-15
     delay_before: 1-5m
     targets:
       - http://git-repository-portal.vantage.local
       - http://ci-cd-pipeline-dashboard.vantage.local
-    duration: 15-25m
+    duration: 5-15m
     expected_artifacts:
       - browser_history_entry
       - dns_query
       - tls_session
 
   - action: web_browse
+    repeat: 10-20
     delay_before: 5-10m
     targets_category: it_reference
     duration: 5-15m
@@ -27,12 +38,23 @@ schedule:
       - dns_query
 
   - action: web_browse
+    repeat: 5-10
     delay_before: 30-60m
     targets_category: social_media
     duration: 5-10m
     expected_artifacts:
       - browser_history_entry
       - dns_query
+
+  - action: email_send
+    repeat: 8-15
+    delay_before: 5-10m
+    params:
+      to: engineering-team-puppet@vantage.local
+      template: generic
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
 
   - action: email_send
     delay_before: 5-10m

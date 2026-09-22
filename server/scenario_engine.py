@@ -145,6 +145,50 @@ def _resolve_share(params: dict, org: str | None, rng: random.Random) -> None:
     params["share"] = share
 
 
+def _resolve_repeat_count(step: dict, rng: random.Random) -> int:
+    """Parse a 'repeat: 50-80' style range (or a bare fixed count, e.g.
+    'repeat: 5') and sample an integer count from it -- how many times
+    this step fires across the day under resolve_window()'s per-day
+    expansion (see _expand_repeats() below). Ignored entirely by
+    resolve()'s flat one-shot path, same as after_hours_eligible and
+    other window-only fields. Absent, a step fires exactly once -- every
+    scenario file written before `repeat` existed keeps working
+    unchanged."""
+    raw = step.get("repeat")
+    if raw is None:
+        return 1
+    raw = str(raw)
+    if "-" in raw:
+        lo, hi = (int(x) for x in raw.split("-"))
+    else:
+        lo = hi = int(raw)
+    return rng.randint(lo, hi)
+
+
+def _expand_repeats(schedule: list[dict], rng: random.Random) -> list[dict]:
+    """A step with `repeat: <n>` or `repeat: <lo>-<hi>` becomes that many
+    independent copies in the returned list -- each one still gets its
+    own duration/delay_before/targets_category/shares_category resolved
+    separately downstream (same step dict, but _spread_steps and the
+    per-step resolution loop in resolve_window() call the seeded rng
+    fresh for each), so a repeated web_browse step doesn't just fire
+    more often, it lands on a different random pick each time too. A
+    step with no `repeat` field is unaffected -- appears exactly once,
+    same as before this existed."""
+    expanded = []
+    for step in schedule:
+        expanded.extend([step] * _resolve_repeat_count(step, rng))
+    # _spread_steps() assigns slot i = window_start + slot_span*i in list
+    # order -- without shuffling, every copy of a repeated step would sit
+    # contiguously (all from extend()'s grouping), clustering it in
+    # whatever fraction of the day its position in the original schedule
+    # happens to land on, rather than spread through the day alongside
+    # the singular narrative steps the way a real interleaved workday
+    # would be.
+    rng.shuffle(expanded)
+    return expanded
+
+
 def _resolve_duration(spec: dict, rng: random.Random) -> timedelta:
     """Parse a 'duration: 5-15m' style range (or a bare fixed value like
     '0s', with no '-') and sample a value from it. Every scenario file
@@ -351,8 +395,9 @@ def resolve_window(
         effective_end = window_end
 
     for host in hosts:
+        expanded_schedule = _expand_repeats(scenario.get("schedule", []), rng)
         for step, intended_start, duration in _spread_steps(
-            scenario.get("schedule", []), effective_start, effective_end, rng
+            expanded_schedule, effective_start, effective_end, rng
         ):
             params = dict(step.get("params", {}))
             target = _resolve_target(step, rng)

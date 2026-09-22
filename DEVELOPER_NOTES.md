@@ -252,6 +252,39 @@ for quick single-run testing.
   duplicated -- not new/invented infrastructure. See "SMB file server
   override" below for how a live deployment points every org's traffic
   at one real file server without editing every scenario file.
+- **`repeat`** (`scenario_engine._expand_repeats()`, `resolve_window()`-
+  only -- `resolve()`'s flat one-shot path ignores it entirely, same as
+  `after_hours_eligible`): without it, a scenario's handful of hand-
+  written steps is *also* the day's entire action count -- `_spread_steps`
+  divides the window into exactly `len(steps)` slots, so a 5-step
+  scenario produces exactly 5 actions no matter how long the window is,
+  nowhere near what an actual 8-hour duty day looks like. A step with
+  `repeat: 15-30` (a bare `repeat: 5` also works) fires that many times
+  instead of once -- each copy still gets its own duration/delay_before/
+  `targets_category`/`shares_category` resolved independently by the
+  same per-step logic downstream, so a repeated step isn't just louder,
+  it's independently randomized each time too (20 `targets_category:
+  social_media` repeats land on 20 separately-rolled picks, not the same
+  one 20 times). `_expand_repeats()` shuffles the expanded list before
+  `_spread_steps` sees it, specifically so every copy of a repeated step
+  doesn't sit contiguously in whatever fraction of the day its original
+  position in the schedule happens to land on -- otherwise 20 `repeat`d
+  web_browse steps listed first would cluster in the morning instead of
+  spreading through the whole day alongside the singular narrative
+  steps. Convention used across the demonstrated scenarios
+  (`software_engineer.yaml`, `accounting_manager.yaml`,
+  `soc_analyst.yaml` -- ~35-60 actions/day, spanning nearly the full
+  8-hour window): only "ambient" steps (`web_browse`, and a second,
+  `content_brief`-free `email_send` step using the local `generic`
+  template so high repeat counts don't multiply live-content-generation
+  LLM calls) get a high `repeat`; the narrative `email_send` (with
+  `content_brief`), `office_doc`, and both `smb_access` steps -- the
+  `should_alert` one especially -- stay unrepeated. A repeated "true
+  positive" would drown its own signal, which is exactly what moving to
+  `resolve_window()`'s injection model was meant to get away from (see
+  "Ranges" above). Not yet rolled out past those three scenarios --
+  deliberately left for a follow-up pass once the demonstrated shape
+  looked right.
 - **Two ways a day gets an injection**, both landing in the same
   `range_injections` table so downstream handling doesn't care which:
   - `injection_mode: "manual"` -- a red-team operator picks an exact
