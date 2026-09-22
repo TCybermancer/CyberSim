@@ -2,6 +2,7 @@ requests>=2.31
 pyyaml>=6.0
 pydantic>=2.6
 playwright>=1.42          # web_browse; Windows auto-detects installed Chrome/Edge
+smbprotocol==1.15.0       # opt-in Linux SMB2/3 backend; no privileged mount
 
 # Uncomment as remaining real action modules are implemented:
 # pysmb>=1.2.9              # smb_access on hosts without a native mount
