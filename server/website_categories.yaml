@@ -72,3 +72,21 @@ public_safety_reference:
   - https://www.dhs.gov
   - https://www.ready.gov
   - https://www.iaff.org
+
+hr_reference:
+  - https://www.shrm.org
+  - https://www.indeed.com
+  - https://www.glassdoor.com
+  - https://www.linkedin.com
+
+logistics_reference:
+  - https://www.freightwaves.com
+  - https://www.supplychaindive.com
+  - https://www.joc.com
+  - https://www.dat.com
+
+business_reference:
+  - https://hbr.org
+  - https://www.forbes.com
+  - https://www.entrepreneur.com
+  - https://www.businessinsider.com

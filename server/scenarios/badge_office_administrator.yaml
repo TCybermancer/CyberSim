@@ -18,6 +18,22 @@ schedule:
       - dns_query
       - tls_session
 
+  - action: web_browse
+    delay_before: 5-10m
+    targets_category: public_safety_reference
+    duration: 5-15m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+
+  - action: web_browse
+    delay_before: 15-30m
+    targets_category: news
+    duration: 5-10m
+    expected_artifacts:
+      - browser_history_entry
+      - dns_query
+
   - action: email_send
     delay_before: 5-10m
     params:
