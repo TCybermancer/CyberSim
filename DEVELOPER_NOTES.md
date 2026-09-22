@@ -563,8 +563,23 @@ for quick single-run testing.
   unlike live content generation, since which relay handles mail isn't
   a content-determinism concern -- so changing it takes effect on the
   next launched run with no agent-side change. See "Mail server" below.
+- Update checking (`server/version.py`, `server/update_check.py`,
+  `GET /version`, `GET /updates/check`, Settings → General's "Updates"
+  section): on-demand only, never a background poller (see
+  `update_check.py`'s module docstring for why -- an airgapped range is
+  a routine deployment target for this server, so it never calls out
+  except on an explicit admin click). Compares `SERVER_VERSION` and
+  every registered agent's last-reported `agent_version` (now persisted
+  on the `agents` table, previously received by `POST /agents/register`
+  and silently dropped) against the latest tagged GitHub release.
+  Reports only -- it doesn't apply anything. For actually applying a
+  server update without the old full teardown-and-redeploy cycle on a
+  systemd install, see `server/update.sh` (in-place `git pull` +
+  restart, reusing the existing venv); Docker Compose deployments just
+  `docker compose pull && up -d` against the image CI already publishes.
+  See "Checking for updates" in docs/README.md.
 - Automated tests (`server/tests/`, `scoring/tests/`, `agent/tests/`,
-  70 tests) and CI (`.github/workflows/`) — see "Testing" and "CI /
+  260+ tests) and CI (`.github/workflows/`) — see "Testing" and "CI /
   Releases" below for scope (full coverage for `server`/`scoring`; agent
   action modules covered for OS-portable logic only, real
   browser/Office/SMB driving stays hand-verified).
@@ -740,6 +755,13 @@ these files:**
 8. Ranges' `day_index` counts consecutive calendar days, not business
    days -- weekends aren't skipped in this first pass (see "Ranges"
    above).
+9. Update checking (`GET /updates/check`) only *reports* that a newer
+   version exists -- there's no push-update mechanism for agents (an
+   outdated one still needs a manual reinstall or Remote Install re-run)
+   or auto-apply for the server (`server/update.sh` is still a command
+   an admin runs by hand). Deliberate for now: auto-applying an update to
+   a fleet of puppet hosts or an unattended orchestrator is a much bigger
+   trust/rollback question than surfacing that one exists.
 
 ## Running the prototype locally (single machine, no real OOB yet)
 

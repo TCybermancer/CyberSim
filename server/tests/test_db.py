@@ -387,3 +387,56 @@ def test_init_db_migration_adds_range_columns_to_a_pre_existing_runs_table():
         row = conn.execute("SELECT * FROM runs WHERE run_id = 'old-run'").fetchone()
         assert row["scenario_name"] == "finance_analyst"
         assert row["range_id"] is None
+
+
+def test_init_db_migration_adds_agent_version_to_a_pre_existing_agents_table():
+    """Same ALTER TABLE guard as the runs/range_id migration above, for
+    agents predating per-agent version tracking (see GET /updates/check)."""
+    import sqlite3
+
+    with sqlite3.connect(db.DB_PATH) as conn:
+        conn.execute("DROP TABLE agents")
+        conn.execute(
+            "CREATE TABLE agents (host TEXT PRIMARY KEY, os TEXT NOT NULL, "
+            "persona TEXT, last_seen TEXT NOT NULL)"
+        )
+        conn.execute("INSERT INTO agents VALUES ('OLD-HOST', 'linux', NULL, '2026-01-01T00:00:00')")
+
+    db.init_db()
+    db.init_db()
+
+    with db.get_conn() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(agents)").fetchall()}
+        assert "agent_version" in cols
+        row = conn.execute("SELECT * FROM agents WHERE host = 'OLD-HOST'").fetchone()
+        assert row["os"] == "linux"
+        assert row["agent_version"] is None
+
+
+def test_upsert_agent_stores_and_updates_agent_version():
+    db.upsert_agent("FIN-WKS03", "windows", "finance_analyst", "2026-01-01T00:00:00", agent_version="0.2.0")
+
+    agents = db.list_agents()
+    assert agents[0]["agent_version"] == "0.2.0"
+
+    db.upsert_agent("FIN-WKS03", "windows", "finance_analyst", "2026-01-02T00:00:00", agent_version="0.3.0")
+
+    agents = db.list_agents()
+    assert agents[0]["agent_version"] == "0.3.0"
+
+
+def test_upsert_agent_without_version_defaults_to_none():
+    db.upsert_agent("FIN-WKS04", "linux", "default", "2026-01-01T00:00:00")
+
+    agents = db.list_agents()
+    assert agents[0]["agent_version"] is None
+
+
+def test_touch_agent_does_not_clobber_existing_agent_version():
+    db.upsert_agent("FIN-WKS05", "linux", "default", "2026-01-01T00:00:00", agent_version="0.2.0")
+
+    db.touch_agent("FIN-WKS05", "2026-01-01T00:05:00")
+
+    agents = db.list_agents()
+    assert agents[0]["agent_version"] == "0.2.0"
+    assert agents[0]["last_seen"] == "2026-01-01T00:05:00"

@@ -261,6 +261,11 @@ def init_db():
         # every run launched outside a range (the overwhelming majority).
         _ensure_column(conn, "runs", "range_id", "TEXT")
         _ensure_column(conn, "runs", "day_index", "INTEGER")
+        # agents predates per-agent version tracking -- populated from
+        # AgentRegistration.agent_version on the next register call (see
+        # app.py), NULL for any host that's only ever polled without a
+        # full register since upgrading. See GET /updates/check.
+        _ensure_column(conn, "agents", "agent_version", "TEXT")
 
 
 def save_run(
@@ -382,7 +387,7 @@ def save_completion(action_id: str, payload: dict):
 def list_agents() -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT host, os, persona, last_seen FROM agents ORDER BY last_seen DESC"
+            "SELECT host, os, persona, last_seen, agent_version FROM agents ORDER BY last_seen DESC"
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -410,15 +415,15 @@ def touch_agent(host: str, last_seen: str):
             )
 
 
-def upsert_agent(host: str, os_: str, persona: str | None, last_seen: str):
+def upsert_agent(host: str, os_: str, persona: str | None, last_seen: str, agent_version: str | None = None):
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO agents (host, os, persona, last_seen) VALUES (?, ?, ?, ?)
+            INSERT INTO agents (host, os, persona, last_seen, agent_version) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(host) DO UPDATE SET os=excluded.os, persona=excluded.persona,
-                last_seen=excluded.last_seen
+                last_seen=excluded.last_seen, agent_version=excluded.agent_version
             """,
-            (host, os_, persona, last_seen),
+            (host, os_, persona, last_seen, agent_version),
         )
 
 

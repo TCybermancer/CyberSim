@@ -63,6 +63,10 @@ Agents on the in-band range network reach this API only via their OOB NIC
                                 credentials (admin only, secrets masked; see content_gen.py
                                 and remote_install.py)
   PUT  /settings                update any of the above (admin only)
+  GET  /version                 this server's own version (see version.py), no session needed
+  GET  /updates/check           on-demand only (admin only): latest tagged GitHub release vs.
+                                this server's version and every registered agent's last-
+                                reported agent_version (see update_check.py)
 
 Auth has two independent layers (see auth.py's module docstring for the
 tradeoffs each one made):
@@ -106,8 +110,10 @@ import content_gen
 import db
 import remote_install
 import scoring_core
+import update_check
 from models import ActionSpec, ActionType, AgentRegistration, CompletionRecord, IntentRecord, PollResponse
 from scenario_engine import load_scenario, resolve, resolve_window
+from version import SERVER_VERSION
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -180,7 +186,7 @@ async def startup():
 # which specific actions a session can take beyond read-only viewing is
 # a separate, per-route check (see require_admin below), since "viewer"
 # accounts should reach every one of these paths but not mutate anything.
-_PUBLIC_PATHS = {"/health", "/auth/login", "/"}
+_PUBLIC_PATHS = {"/health", "/version", "/auth/login", "/"}
 _AGENT_TOKEN_PATHS = {"/agents/register", "/ledger/intent", "/ledger/completion"}
 _INSTALL_BUNDLE_PATH = "/install/agent-bundle"
 
@@ -425,7 +431,7 @@ def _check_agent_token(host: str, authorization: str | None):
 def register_agent(reg: AgentRegistration, authorization: str | None = Header(default=None)):
     _check_agent_token(reg.host, authorization)
     now = datetime.utcnow()
-    db.upsert_agent(reg.host, reg.os, reg.persona, now.isoformat())
+    db.upsert_agent(reg.host, reg.os, reg.persona, now.isoformat(), reg.agent_version)
 
     response = {"status": "registered", "host": reg.host}
     if reg.client_time is not None:
@@ -1128,6 +1134,15 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/version")
+def version():
+    """This server's own version, always reachable with no session (same
+    as /health) -- the dashboard shows it without needing an admin login,
+    since it's not sensitive. See GET /updates/check for the admin-only
+    comparison against the latest GitHub release."""
+    return {"server_version": SERVER_VERSION}
+
+
 @app.get("/scenarios")
 def list_scenarios():
     """Scenario names available to launch a run against (read from
@@ -1284,6 +1299,38 @@ def agents_live_status():
         "agents": [
             {**a, "current_action": current.get(a["host"])} for a in db.list_agents()
         ]
+    }
+
+
+@app.get("/updates/check", dependencies=[Depends(require_admin)])
+def check_for_updates():
+    """On-demand only -- see update_check.py's module docstring for why
+    this is a button, not a background poller. Compares this server's
+    own version, and every registered agent's agent_version from its
+    last register call, against the latest tagged GitHub release. An
+    agent that's never re-registered since upgrading (or never reported
+    a version at all, e.g. pre-0.2.0) is simply left out of `outdated`
+    rather than guessed at."""
+    try:
+        release = update_check.fetch_latest_release()
+    except update_check.UpdateCheckError as e:
+        raise HTTPException(502, str(e))
+
+    latest = release["tag"]
+    outdated_agents = [
+        {"host": a["host"], "agent_version": a["agent_version"]}
+        for a in db.list_agents()
+        if a.get("agent_version") and update_check.is_newer(latest, a["agent_version"])
+    ]
+    return {
+        "latest_version": latest.lstrip("vV"),
+        "release_url": release["url"],
+        "published_at": release["published_at"],
+        "server": {
+            "current_version": SERVER_VERSION,
+            "update_available": update_check.is_newer(latest, SERVER_VERSION),
+        },
+        "agents": {"outdated": outdated_agents},
     }
 
 
