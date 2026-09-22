@@ -37,3 +37,11 @@ server/install_artifacts/install-linux.sh
 
 # pytest
 .pytest_cache/
+
+# Local build/QA scratch -- leading underscore keeps these out of the
+# scenario picker (app.py globs server/scenarios/*.yaml with no filter,
+# so an unignored one would show up live) and this keeps a stray build
+# stub or hand-testing install params out of history too.
+server/scenarios/_*.yaml
+agent/installer/cybersim-agent
+agent/installer/install-defaults.txt
