@@ -1,5 +1,0 @@
-# Control-node Python deps for DC provisioning.
-# community.vmware's own modules already need pyvmomi; scripts/vmware_guestexec.py
-# (used by roles/dc_template_prep, since no community.vmware module runs an
-# arbitrary program in the guest) needs it directly too.
-pyvmomi>=8.0

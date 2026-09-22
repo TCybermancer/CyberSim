@@ -73,9 +73,9 @@ def install_linux(
     perspective -- only connection/auth failures raise
     RemoteInstallError.
 
-    Key-based auth is tried first if a private key is given (matches
-    provisioning/inventory.ini.example's convention); password auth is
-    the fallback, for hosts set up without a deployed key -- a real,
+    Key-based auth is tried first if a private key is given (the same
+    convention range-provisioning inventories document); password auth
+    is the fallback, for hosts set up without a deployed key -- a real,
     common case (e.g. a quick lab VM using a cloud image's default
     password-auth account), not just a hypothetical."""
     if not ssh_private_key_pem and not ssh_password:
@@ -117,7 +117,7 @@ def install_linux(
 
 
 _WINRM_ENDPOINTS = (
-    "https://{ip}:5986/wsman",  # matches provisioning/inventory.ini.example's convention
+    "https://{ip}:5986/wsman",  # matches the documented range-provisioning WinRM convention
     "http://{ip}:5985/wsman",  # the far more common *actual* default -- plain `Enable-
     # PSRemoting` on Windows doesn't set up an HTTPS listener unless someone explicitly
     # configured one. Confirmed against a real Windows 10 target during manual

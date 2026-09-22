@@ -86,7 +86,7 @@ class AgentRegistration(BaseModel):
     host: str
     os: str  # "windows" | "linux"
     persona: Optional[str] = None
-    agent_version: str = "0.1.0"
+    agent_version: str = "0.2.0"
     client_time: Optional[datetime] = None  # for server-side clock-drift detection
 
 

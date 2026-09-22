@@ -133,9 +133,9 @@ def test_install_windows_wraps_connection_failure_in_remote_install_error():
 
 
 def test_install_windows_falls_back_from_https_to_http():
-    """Regression test: HTTPS/5986 (the documented convention, matching
-    provisioning/inventory.ini.example) was refused outright against a
-    real Windows 10 target during manual verification -- plain
+    """Regression test: HTTPS/5986 (the documented range-provisioning
+    convention) was refused outright against a real Windows 10 target
+    during manual verification -- plain
     `Enable-PSRemoting` only sets up an HTTP/5985 listener unless
     someone explicitly configures HTTPS. Confirms both endpoints get
     tried, in that order, and a success on the second one is returned
