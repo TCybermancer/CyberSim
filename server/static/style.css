@@ -212,6 +212,18 @@ button {
 button:hover { filter: brightness(1.08); }
 button:disabled { opacity: 0.6; cursor: not-allowed; }
 
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 400;
+  font-size: 0.78rem;
+  padding: 0;
+  margin-right: 0.8rem;
+  text-decoration: underline;
+}
+.link-btn:hover { filter: none; opacity: 0.75; }
+
 .hint { color: var(--muted); font-weight: 400; font-size: 0.78rem; }
 
 .preview {

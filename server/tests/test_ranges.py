@@ -5,7 +5,7 @@ isolated_db fixture; `client` (pre-authenticated as admin) comes from
 test_app.py's fixtures via conftest-style discovery within tests/."""
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -374,6 +374,7 @@ _TS_RANGE = {
     "window_start_local": "08:00",
     "window_end_local": "16:00",
     "timezone": "UTC",
+    "active_weekdays": [0, 1, 2, 3, 4, 5, 6],
 }
 
 
@@ -567,3 +568,116 @@ def test_viewer_cannot_fire_live_injection(viewer_client, client):
         json={"behavior_id": "rnd_secrets_smb"},
     )
     assert resp.status_code == 403
+
+
+# ---- active_weekdays (weekday-mask scheduling) --------------------------
+
+
+def test_nth_active_date_all_days_is_the_identity():
+    # Every weekday active == plain start + timedelta(days=day_index),
+    # the behavior this replaced.
+    start = date(2026, 1, 5)  # a Monday
+    for n in range(10):
+        assert app_module._nth_active_date(start, n, [0, 1, 2, 3, 4, 5, 6]) == start + timedelta(days=n)
+
+
+def test_nth_active_date_skips_weekends():
+    start = date(2026, 1, 5)  # Monday
+    weekdays_only = [0, 1, 2, 3, 4]
+    expected = [
+        date(2026, 1, 5),  # Mon (day 0)
+        date(2026, 1, 6),  # Tue
+        date(2026, 1, 7),  # Wed
+        date(2026, 1, 8),  # Thu
+        date(2026, 1, 9),  # Fri
+        date(2026, 1, 12),  # Mon -- skips Sat 1/10, Sun 1/11
+        date(2026, 1, 13),  # Tue
+    ]
+    actual = [app_module._nth_active_date(start, n, weekdays_only) for n in range(len(expected))]
+    assert actual == expected
+
+
+def test_nth_active_date_day_zero_is_always_start():
+    start = date(2026, 1, 5)
+    assert app_module._nth_active_date(start, 0, [0]) == start
+
+
+def test_create_range_default_active_weekdays_is_every_day(client):
+    resp = client.post("/ranges", json=_range_payload())
+    assert resp.status_code == 200
+    assert resp.json()["active_weekdays"] == [0, 1, 2, 3, 4, 5, 6]
+
+
+def test_create_range_with_weekday_mask(client):
+    resp = client.post("/ranges", json=_range_payload(active_weekdays=[0, 1, 2, 3, 4]))
+    assert resp.status_code == 200
+    assert resp.json()["active_weekdays"] == [0, 1, 2, 3, 4]
+
+
+def test_create_range_rejects_start_date_not_in_mask(client):
+    # 2026-01-05 is a Monday (weekday 0); excluding it from the mask
+    # while using it as start_date must be rejected, not silently shifted.
+    resp = client.post("/ranges", json=_range_payload(active_weekdays=[1, 2, 3, 4]))
+    assert resp.status_code == 422
+
+
+def test_create_range_rejects_out_of_range_weekday_values(client):
+    resp = client.post("/ranges", json=_range_payload(active_weekdays=[0, 7]))
+    assert resp.status_code == 422
+
+
+def test_create_range_rejects_empty_weekday_mask(client):
+    resp = client.post("/ranges", json=_range_payload(active_weekdays=[]))
+    assert resp.status_code == 422
+
+
+def test_fire_range_day_weekday_mask_skips_the_weekend():
+    # Friday start, Mon-Fri mask, 3 days -- day 1 should land on the
+    # following Monday, not Saturday.
+    db.save_range(
+        "r1", "Test", "2026-01-09", 3, "08:00", "16:00", "UTC", 1.0, "manual", 0.0, None,
+        "2026-01-09T08:00:00", "2026-01-01T00:00:00", active_weekdays=[0, 1, 2, 3, 4],
+    )
+    db.save_range_hosts("r1", [("HOST-A", "finance_analyst")])
+
+    rng = db.get_range("r1")
+    asyncio.run(app_module._fire_range_day(rng, datetime(2026, 1, 9, 8, 0, 0), db.get_settings()))
+
+    updated = db.get_range("r1")
+    assert updated["current_day_index"] == 1
+    assert updated["next_day_launch_at"] == "2026-01-12T08:00:00"  # Monday, not Saturday
+
+
+def test_fire_range_day_weekday_mask_with_time_scale_compresses_the_real_gap():
+    # Same Friday-start, Mon-Fri-mask range as above, but heavily
+    # compressed -- the 3-calendar-day weekend gap must still compress
+    # proportionally, not be treated as a 1-day gap.
+    db.save_range(
+        "r1", "Test", "2026-01-09", 3, "08:00", "16:00", "UTC", 0.1, "manual", 0.0, None,
+        "2026-01-09T08:00:00", "2026-01-01T00:00:00", active_weekdays=[0, 1, 2, 3, 4],
+    )
+    db.save_range_hosts("r1", [("HOST-A", "finance_analyst")])
+
+    rng = db.get_range("r1")
+    day0_start, _ = app_module._day_window_utc(rng, 0)
+    day1_start, _ = app_module._day_window_utc(rng, 1)
+    logical_day0_start, _ = app_module._logical_day_window(rng, 0)
+    logical_day1_start, _ = app_module._logical_day_window(rng, 1)
+
+    # Friday 08:00 -> Monday 08:00 is a real 3-day gap.
+    assert (logical_day1_start - logical_day0_start) == timedelta(days=3)
+    # At time_scale=0.1 that compresses to 7.2 hours, not the ~2.4h a
+    # (wrongly) assumed 1-day gap would compress to.
+    assert (day1_start - day0_start) == timedelta(hours=7, minutes=12)
+
+
+def test_get_range_returns_active_weekdays_for_a_range_predating_the_field():
+    # A row inserted the way an old caller would (no active_weekdays
+    # argument at all) must still round-trip through get_range cleanly,
+    # via save_range's own default -- same backward-compat contract as
+    # the column's DEFAULT for a pre-existing database.
+    db.save_range(
+        "r1", "Test", "2026-01-05", 5, "08:00", "16:00", "UTC", 1.0, "manual", 0.0, None,
+        "2026-01-05T08:00:00", "2026-01-01T00:00:00",
+    )
+    assert db.get_range("r1")["active_weekdays"] == [0, 1, 2, 3, 4, 5, 6]

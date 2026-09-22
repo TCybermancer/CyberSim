@@ -203,6 +203,12 @@ CREATE TABLE IF NOT EXISTS ranges (
     window_end_local TEXT NOT NULL,        -- "16:00"
     timezone TEXT NOT NULL,                -- IANA name, e.g. "America/Chicago"
     time_scale REAL NOT NULL DEFAULT 1.0,  -- 1.0 = real-time; <1.0 = compressed (see resolve_window's day-shape docs)
+    active_weekdays TEXT NOT NULL DEFAULT '[0,1,2,3,4,5,6]',  -- JSON list, date.weekday() values
+                                            -- (0=Monday..6=Sunday); day_index counts only dates
+                                            -- whose weekday is in this set (see app.py's
+                                            -- _nth_active_date). Default = every day, so an
+                                            -- existing range (or one created without this field)
+                                            -- behaves exactly as before it existed.
     injection_mode TEXT NOT NULL CHECK (injection_mode IN ('auto', 'manual')),
     injection_probability REAL NOT NULL DEFAULT 0.0,  -- only read when injection_mode='auto'
     seed INTEGER,                          -- NULL = fresh distributional seed per host per day
@@ -280,6 +286,11 @@ def init_db():
         # settings predates the SMB server override -- see this table's
         # own comment above and app.py's _apply_smb_server_override.
         _ensure_column(conn, "settings", "smb_server_override", "TEXT")
+        # ranges predates weekday-mask scheduling -- see this table's own
+        # comment above. Every pre-existing range gets the same default
+        # as a fresh one (every day active), so it keeps behaving exactly
+        # as it always has.
+        _ensure_column(conn, "ranges", "active_weekdays", "TEXT NOT NULL DEFAULT '[0,1,2,3,4,5,6]'")
 
 
 def save_run(
@@ -764,15 +775,21 @@ def save_range(
     seed: int | None,
     next_day_launch_at: str,
     created_at: str,
+    active_weekdays: list[int] | None = None,
 ):
+    """active_weekdays: date.weekday() values (0=Monday..6=Sunday) this
+    range actually fires on -- None (the default, and every existing
+    caller predating this parameter) means every day, same as omitting
+    it entirely. See the `ranges` table's own schema comment and app.py's
+    _nth_active_date()."""
     with get_conn() as conn:
         conn.execute(
             """
             INSERT INTO ranges
                 (range_id, name, start_date, num_days, window_start_local, window_end_local,
                  timezone, time_scale, injection_mode, injection_probability, seed, enabled,
-                 current_day_index, next_day_launch_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+                 current_day_index, next_day_launch_at, created_at, active_weekdays)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)
             """,
             (
                 range_id,
@@ -788,6 +805,7 @@ def save_range(
                 seed,
                 next_day_launch_at,
                 created_at,
+                json.dumps(active_weekdays if active_weekdays is not None else [0, 1, 2, 3, 4, 5, 6]),
             ),
         )
 
@@ -805,6 +823,7 @@ def save_range_hosts(range_id: str, host_scenarios: list[tuple[str, str]]):
 def _row_to_range(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["enabled"] = bool(d["enabled"])
+    d["active_weekdays"] = json.loads(d["active_weekdays"])
     return d
 
 

@@ -158,6 +158,34 @@ function setupHostBuilder() {
 
 // ---- create-range form --------------------------------------------------
 
+function getActiveWeekdays() {
+  return Array.from(document.querySelectorAll(".range-weekday-checkbox:checked")).map((el) => parseInt(el.value, 10));
+}
+
+function setActiveWeekdays(values) {
+  const set = new Set(values);
+  document.querySelectorAll(".range-weekday-checkbox").forEach((el) => {
+    el.checked = set.has(parseInt(el.value, 10));
+  });
+  updateWeekdayStartWarning();
+}
+
+function updateWeekdayStartWarning() {
+  const raw = $("range-start-date-input").value;
+  const warning = $("range-weekday-start-warning");
+  if (!raw) {
+    warning.style.display = "none";
+    return;
+  }
+  // date.weekday() convention (0=Monday..6=Sunday) -- getUTCDay() is
+  // 0=Sunday..6=Saturday, and a bare "YYYY-MM-DD" string parses as UTC
+  // midnight, so getUTCDay() (not getDay(), which would apply the
+  // browser's local timezone to a date that has none) gives the actual
+  // calendar weekday regardless of where this browser is.
+  const startWeekday = (new Date(raw).getUTCDay() + 6) % 7;
+  warning.style.display = getActiveWeekdays().includes(startWeekday) ? "none" : "block";
+}
+
 function setupRangeForm() {
   $("range-compressed-toggle").addEventListener("change", (e) => {
     $("range-time-scale-row").style.display = e.target.checked ? "" : "none";
@@ -165,6 +193,12 @@ function setupRangeForm() {
   $("range-injection-mode-select").addEventListener("change", (e) => {
     $("range-injection-probability-row").style.display = e.target.value === "auto" ? "" : "none";
   });
+  $("range-start-date-input").addEventListener("change", updateWeekdayStartWarning);
+  document.querySelectorAll(".range-weekday-checkbox").forEach((el) => {
+    el.addEventListener("change", updateWeekdayStartWarning);
+  });
+  $("range-weekdays-business-btn").addEventListener("click", () => setActiveWeekdays([0, 1, 2, 3, 4]));
+  $("range-weekdays-all-btn").addEventListener("click", () => setActiveWeekdays([0, 1, 2, 3, 4, 5, 6]));
 
   $("range-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -185,6 +219,7 @@ function setupRangeForm() {
       window_end_local: $("range-window-end-input").value,
       timezone: $("range-timezone-input").value,
       injection_mode: $("range-injection-mode-select").value,
+      active_weekdays: getActiveWeekdays(),
       hosts: pendingHosts,
     };
     if ($("range-compressed-toggle").checked) {
@@ -211,6 +246,7 @@ function setupRangeForm() {
       $("range-window-start-input").value = "08:00";
       $("range-window-end-input").value = "16:00";
       $("range-timezone-input").value = "UTC";
+      updateWeekdayStartWarning();
       await loadRanges();
       selectRange(created.range_id);
     } catch (err) {
@@ -230,6 +266,15 @@ function dayStatus(r) {
   if (!r.enabled && r.current_day_index >= r.num_days) return "done";
   if (!r.enabled) return "paused";
   return `day ${Math.min(r.current_day_index + 1, r.num_days)}/${r.num_days}`;
+}
+
+const WEEKDAY_ABBREV = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function weekdaysLabel(activeWeekdays) {
+  if (!activeWeekdays || activeWeekdays.length === 7) return "every day";
+  const sorted = [...activeWeekdays].sort((a, b) => a - b);
+  if (JSON.stringify(sorted) === JSON.stringify([0, 1, 2, 3, 4])) return "Mon-Fri";
+  return sorted.map((d) => WEEKDAY_ABBREV[d]).join("/");
 }
 
 async function loadRanges() {
@@ -327,7 +372,8 @@ async function selectRange(rangeId) {
 
   const detail = await api(`/ranges/${rangeId}`);
   $("range-detail-card").style.display = "";
-  $("range-detail-name").textContent = `(${escapeHtml(detail.name)} — ${dayStatus(detail)})`;
+  $("range-detail-name").textContent =
+    `(${escapeHtml(detail.name)} — ${dayStatus(detail)} — ${weekdaysLabel(detail.active_weekdays)})`;
 
   document.querySelector("#range-detail-hosts-table tbody").innerHTML = detail.hosts
     .map((h) => `<tr><td>${escapeHtml(h.host)}</td><td>${escapeHtml(h.scenario_name)}</td></tr>`)

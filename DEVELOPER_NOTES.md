@@ -348,11 +348,25 @@ for quick single-run testing.
   The day cursor (`ranges.current_day_index`/`next_day_launch_at`)
   advances unconditionally once every host's been attempted, so one dead
   host can't stall the whole range's progression.
-- **`day_index` counts consecutive calendar days**, not business days --
-  weekends aren't skipped in this first pass. Backward-compatible follow-
-  up if wanted: it only changes how `day_index` maps to a calendar date
-  in `_day_window_utc()`, not anything about how a day's window itself
-  gets resolved.
+- **`active_weekdays`** (`ranges` table, JSON list of `date.weekday()`
+  values -- 0=Monday..6=Sunday; default every day, unchanged from before
+  this existed): `day_index` counts only dates whose weekday is in this
+  set, via `_nth_active_date()` -- a Mon-Fri range's `day_index=5` lands
+  on the following Monday, not Saturday. `create_range()` rejects a
+  `start_date` whose own weekday isn't in the mask (day 0 must be an
+  active day, not silently shifted forward) and an empty/out-of-range
+  mask. This is exactly the "it only changes how `day_index` maps to a
+  calendar date" follow-up this section used to describe as a future
+  possibility -- `_day_window_utc()`'s `time_scale` compression needed
+  *no* corresponding change: it derives each day's real-time gap as
+  `_logical_day_window(day_index) - _logical_day_window(0)`, an actual
+  elapsed-time delta rather than a `day_index` multiplier, so a
+  Friday-to-Monday 3-day gap already compresses correctly once
+  `_logical_day_window()` resolves the right dates. `server/static/
+  ranges.html`'s "Active days" checkboxes (plus one-click "Mon-Fri
+  only"/"Every day") drive this from the create-range form, with a
+  client-side warning (mirroring the server's own validation) if the
+  chosen start date isn't one of the checked days.
 - **`time_scale`** (1.0 = real-time, the default; <1.0 compresses)
   is applied in `_day_window_utc()`: day 0 always launches at its own
   literal calendar moment, completely unaffected by `time_scale` -- a
@@ -713,10 +727,7 @@ these files:**
    loopback SMB share to exercise those, which is a heavier CI setup
    than was worth building for the initial suite. Those paths stay
    hand-verified for now (see each action module's entry above).
-6. Ranges' `day_index` counts consecutive calendar days, not business
-   days -- weekends aren't skipped in this first pass (see "Ranges"
-   above).
-7. Update checking (`GET /updates/check`) only *reports* that a newer
+6. Update checking (`GET /updates/check`) only *reports* that a newer
    version exists -- there's no push-update mechanism for agents (an
    outdated one still needs a manual reinstall or Remote Install re-run)
    or auto-apply for the server (`server/update.sh` is still a command

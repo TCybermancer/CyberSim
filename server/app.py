@@ -759,22 +759,48 @@ def _load_suspicious_behaviors() -> list[dict]:
         return yaml.safe_load(f)
 
 
+def _nth_active_date(start: date, day_index: int, active_weekdays: list[int]) -> date:
+    """The date `day_index` days into a range's active-weekday sequence,
+    starting from `start` (day 0 == start itself -- create_range()
+    validates start_date's own weekday is in active_weekdays, so this
+    never has to search forward to find a day-0 that differs from what
+    was asked for). date.weekday() values: 0=Monday..6=Sunday.
+
+    A plain linear walk, not closed-form -- day_index is small in
+    practice (a range's num_days), and this keeps the logic obviously
+    correct against the mask rather than clever. active_weekdays == all
+    7 days degenerates to exactly start + timedelta(days=day_index),
+    the identity this replaced."""
+    active = set(active_weekdays)
+    day = start
+    remaining = day_index
+    while remaining > 0:
+        day += timedelta(days=1)
+        if day.weekday() in active:
+            remaining -= 1
+    return day
+
+
 def _logical_day_window(range_row: dict, day_index: int) -> tuple[datetime, datetime]:
     """The [window_start, window_end) a range's given day *conceptually*
     represents, in naive UTC (this codebase's convention throughout) --
     purely a function of start_date/window_start_local/window_end_local/
-    timezone/day_index, with no time_scale applied. This is what a day's
-    window meant before compression existed, and still is the "what hour
-    of an 8-4 business day is this" anchor _day_window_utc scales from.
+    timezone/active_weekdays/day_index, with no time_scale applied. This
+    is what a day's window meant before compression existed, and still
+    is the "what hour of an 8-4 business day is this" anchor
+    _day_window_utc scales from.
 
-    day_index counts consecutive CALENDAR days from start_date; weekends
-    aren't skipped in this first pass (every day of a Range fires,
-    business-hours-windowed, whether or not it's a weekday). Skipping
-    weekends is a natural, backward-compatible follow-up if wanted --
-    it only changes how day_index maps to a calendar date, not anything
-    about how a day's window itself gets resolved."""
+    day_index counts only dates whose weekday is in active_weekdays
+    (see _nth_active_date) -- a range scoped to Mon-Fri and asked for
+    day_index=5 lands on the following Monday, not the following
+    Saturday. _day_window_utc's time_scale compression needs no
+    corresponding change: it derives each day's gap from day 0 as
+    `_logical_day_window(day_index) - _logical_day_window(0)`, an actual
+    elapsed-time delta rather than a day_index multiplier, so a
+    Friday-to-Monday gap already compresses correctly once this function
+    resolves the right dates -- see that function's own docstring."""
     tz = ZoneInfo(range_row["timezone"])
-    day = date.fromisoformat(range_row["start_date"]) + timedelta(days=day_index)
+    day = _nth_active_date(date.fromisoformat(range_row["start_date"]), day_index, range_row["active_weekdays"])
     start_h, start_m = (int(x) for x in range_row["window_start_local"].split(":"))
     end_h, end_m = (int(x) for x in range_row["window_end_local"].split(":"))
     local_start = datetime(day.year, day.month, day.day, start_h, start_m, tzinfo=tz)
@@ -974,6 +1000,10 @@ class RangeCreateRequest(BaseModel):
     injection_mode: str = Field(pattern=r"^(auto|manual)$")
     injection_probability: float = Field(default=0.0, ge=0, le=1)
     seed: int | None = None
+    # date.weekday() values (0=Monday..6=Sunday) this range actually
+    # fires on -- default every day, unchanged from before this field
+    # existed. A weekday-only range: [0,1,2,3,4]. See _nth_active_date.
+    active_weekdays: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6], min_length=1)
     hosts: list[RangeHostAssignment] = Field(min_length=1)
 
 
@@ -989,6 +1019,15 @@ def create_range(req: RangeCreateRequest):
         ZoneInfo(req.timezone)
     except ZoneInfoNotFoundError:
         raise HTTPException(422, f"unknown timezone '{req.timezone}'")
+    if not set(req.active_weekdays) <= set(range(7)):
+        raise HTTPException(422, "active_weekdays must only contain 0-6 (0=Monday..6=Sunday)")
+    start_weekday = date.fromisoformat(req.start_date).weekday()
+    if start_weekday not in req.active_weekdays:
+        raise HTTPException(
+            422,
+            f"start_date ({req.start_date}) falls on weekday {start_weekday}, which isn't in "
+            f"active_weekdays {sorted(req.active_weekdays)} -- day 0 must be an active day",
+        )
 
     range_id = str(uuid.uuid4())
     # Day 0 is unaffected by time_scale either way (see _day_window_utc),
@@ -1000,6 +1039,7 @@ def create_range(req: RangeCreateRequest):
             "window_end_local": req.window_end_local,
             "timezone": req.timezone,
             "time_scale": req.time_scale,
+            "active_weekdays": req.active_weekdays,
         },
         0,
     )
@@ -1017,6 +1057,7 @@ def create_range(req: RangeCreateRequest):
         req.seed,
         first_window_start.isoformat(),
         datetime.utcnow().isoformat(),
+        req.active_weekdays,
     )
     db.save_range_hosts(range_id, [(h.host, h.scenario_name) for h in req.hosts])
     return db.get_range(range_id)

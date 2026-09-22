@@ -10,7 +10,7 @@
   if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
 })();
 </script>
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
 <div class="app-shell">
@@ -59,6 +59,22 @@
             <input id="range-num-days-input" type="number" min="1" step="1" value="5" required>
           </label>
         </div>
+
+        <fieldset id="range-weekday-mask">
+          <legend>Active days <span class="hint">(day_index only counts these -- e.g. Mon-Fri skips weekends entirely rather than firing business-hours actions on them)</span></legend>
+          <label class="checkbox-label"><input type="checkbox" class="range-weekday-checkbox" value="0" checked> Mon</label>
+          <label class="checkbox-label"><input type="checkbox" class="range-weekday-checkbox" value="1" checked> Tue</label>
+          <label class="checkbox-label"><input type="checkbox" class="range-weekday-checkbox" value="2" checked> Wed</label>
+          <label class="checkbox-label"><input type="checkbox" class="range-weekday-checkbox" value="3" checked> Thu</label>
+          <label class="checkbox-label"><input type="checkbox" class="range-weekday-checkbox" value="4" checked> Fri</label>
+          <label class="checkbox-label"><input type="checkbox" class="range-weekday-checkbox" value="5" checked> Sat</label>
+          <label class="checkbox-label"><input type="checkbox" class="range-weekday-checkbox" value="6" checked> Sun</label>
+          <button type="button" id="range-weekdays-business-btn" class="link-btn">Mon-Fri only</button>
+          <button type="button" id="range-weekdays-all-btn" class="link-btn">Every day</button>
+        </fieldset>
+        <p class="hint" id="range-weekday-start-warning" style="display:none">
+          Start date's weekday isn't checked above -- day 0 must be an active day.
+        </p>
 
         <div class="row">
           <label>
@@ -224,6 +240,6 @@
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=4"></script>
 <script src="icons.js?v=1"></script>
-<script src="ranges.js?v=2"></script>
+<script src="ranges.js?v=3"></script>
 </body>
 </html>
