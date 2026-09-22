@@ -36,6 +36,13 @@ Agents on the in-band range network reach this API only via their OOB NIC
   POST /ranges/{id}/injections  red-team-directed manual targeting: graft a specific
                                 suspicious_behaviors.yaml entry onto a specific host's
                                 specific day ahead of time
+  POST /ranges/{id}/hosts/{host}/fire-injection
+                                red-team-directed LIVE targeting: fire a specific
+                                suspicious_behaviors.yaml entry against a host that's
+                                already mid-run, right now, instead of pre-staging one
+                                for a day that hasn't launched yet -- rides the same
+                                "agents poll for fresh ActionSpecs" mechanism as the
+                                mail/SMB server overrides, no agent-side change needed
   GET  /suspicious-behaviors    the injection library (id/label/category/tags) for the
                                 UI's manual-injection picker
   GET  /install/agent-bundle   zips/tars the pre-built agent installer (?os=windows,
@@ -112,7 +119,7 @@ import remote_install
 import scoring_core
 import update_check
 from models import ActionSpec, ActionType, AgentRegistration, CompletionRecord, IntentRecord, PollResponse
-from scenario_engine import load_scenario, resolve, resolve_window
+from scenario_engine import load_scenario, resolve, resolve_injection, resolve_window
 from version import SERVER_VERSION
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
@@ -1085,6 +1092,81 @@ def create_range_injection(range_id: str, req: RangeInjectionCreateRequest):
         datetime.utcnow().isoformat(),
     )
     return {"status": "ok"}
+
+
+class LiveInjectionRequest(BaseModel):
+    behavior_id: str
+    params_override: dict[str, Any] | None = None
+
+
+@app.post("/ranges/{range_id}/hosts/{host}/fire-injection", dependencies=[Depends(require_admin)])
+def fire_live_injection(range_id: str, host: str, req: LiveInjectionRequest):
+    """Red-team-directed LIVE targeting: unlike POST .../injections
+    above (which only takes effect the next time _fire_range_day
+    launches that host's day), this fires immediately against a host
+    that's already mid-run right now -- new ActionSpecs land in the
+    same active run, anchored at datetime.utcnow(), and the agent picks
+    them up on its very next poll (db.pending_actions_for_host already
+    hands out anything with dispatched=0 and intended_start <= now, no
+    matter which endpoint inserted the row or when). No agent-side
+    change needed, same "agents just poll for fresh state" mechanism as
+    the mail/SMB server overrides.
+
+    Requires the host to currently have an active run that belongs to
+    THIS range -- there's no sensible "now" to anchor an injection
+    against a host that isn't actually running anything. Still subject
+    to the same one-injection-per-host-per-day rule as the pre-staging
+    endpoint (a range_injections row for today already existing --
+    whether from an earlier live fire, a pre-staged manual one, or an
+    auto-mode roll -- blocks a second one), so this can't be used to
+    stack multiple "true positives" onto the same day."""
+    r = db.get_range(range_id)
+    if not r:
+        raise HTTPException(404, f"range '{range_id}' not found")
+    host_rows = {h["host"]: h for h in db.get_range_hosts(range_id)}
+    if host not in host_rows:
+        raise HTTPException(404, f"host '{host}' is not part of range '{range_id}'")
+    behavior = next((b for b in _load_suspicious_behaviors() if b["id"] == req.behavior_id), None)
+    if behavior is None:
+        raise HTTPException(404, f"behavior '{req.behavior_id}' not found in suspicious_behaviors.yaml")
+
+    run_id = db.active_runs_for_hosts([host]).get(host)
+    run = db.get_run(run_id) if run_id else None
+    if not run or run.get("range_id") != range_id:
+        raise HTTPException(
+            409,
+            f"host '{host}' has no active run in range '{range_id}' right now -- it isn't mid-run, "
+            "so there's nothing to fire a live injection into",
+        )
+    day_index = run["day_index"]
+
+    if db.get_range_injection(range_id, host, day_index):
+        raise HTTPException(409, f"an injection already exists for {host} on day {day_index}")
+
+    try:
+        scenario = load_scenario(SCENARIOS_DIR / f"{host_rows[host]['scenario_name']}.yaml")
+    except FileNotFoundError:
+        raise HTTPException(404, f"scenario '{host_rows[host]['scenario_name']}' not found")
+
+    specs = resolve_injection(
+        scenario, host, run_id, datetime.utcnow(), behavior, random.Random(), req.params_override
+    )
+    settings = db.get_settings()
+    _apply_mail_server_override(specs, settings)
+    _apply_smb_server_override(specs, settings)
+    db.save_action_specs([s.model_dump(mode="json") for s in specs])
+
+    db.save_range_injection(
+        str(uuid.uuid4()),
+        range_id,
+        host,
+        day_index,
+        req.behavior_id,
+        "manual",
+        req.params_override,
+        datetime.utcnow().isoformat(),
+    )
+    return {"status": "ok", "run_id": run_id, "actions": [s.model_dump(mode="json") for s in specs]}
 
 
 @app.get("/suspicious-behaviors")

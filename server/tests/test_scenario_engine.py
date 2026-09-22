@@ -2,12 +2,13 @@
 See docs/README.md "Determinism for validation" for why byte-identical
 replay from a seed matters here."""
 
+import random
 from datetime import datetime, timedelta
 
 import pytest
 
 from models import ActionType
-from scenario_engine import resolve, resolve_window
+from scenario_engine import resolve, resolve_injection, resolve_window
 
 SCENARIO = {
     "persona": "test_persona",
@@ -515,3 +516,92 @@ def test_resolve_ignores_repeat_field():
     }
     _, _, specs = resolve(scenario, ["HOST-A"], datetime(2026, 1, 1, 12), seed=1)
     assert len(specs) == 1
+
+
+# --- resolve_injection() (live, "right now" injection firing) ----------
+
+INJECTION_SCENARIO = {
+    "persona": "test_persona",
+    "org": "Vantage Corp",
+    "schedule": [],
+}
+
+
+def test_resolve_injection_anchors_the_first_step_at_anchor_time_plus_delay():
+    anchor = datetime(2026, 3, 2, 14, 0, 0)
+    behavior = {
+        "id": "test",
+        "steps": [{"action": "web_browse", "delay_before": "5-5m", "targets": ["http://a"], "duration": "1-1m"}],
+    }
+    actions = resolve_injection(
+        INJECTION_SCENARIO, "HOST-A", "run-1", anchor, behavior, random.Random(1)
+    )
+    assert actions[0].intended_start == anchor + timedelta(minutes=5)
+
+
+def test_resolve_injection_every_step_is_should_alert():
+    actions = resolve_injection(
+        INJECTION_SCENARIO, "HOST-A", "run-1", datetime(2026, 1, 1), INJECTED_BEHAVIOR, random.Random(1)
+    )
+    assert actions and all(a.should_alert for a in actions)
+
+
+def test_resolve_injection_uses_the_given_run_id_and_host():
+    actions = resolve_injection(
+        INJECTION_SCENARIO, "HOST-Z", "specific-run-id", datetime(2026, 1, 1), INJECTED_BEHAVIOR, random.Random(1)
+    )
+    assert all(a.run_id == "specific-run-id" and a.host == "HOST-Z" for a in actions)
+
+
+def test_resolve_injection_substitutes_placeholders():
+    actions = resolve_injection(
+        INJECTION_SCENARIO, "HOST-A", "run-1", datetime(2026, 1, 1), INJECTED_BEHAVIOR, random.Random(1)
+    )
+    smb_action = next(a for a in actions if a.action_type.value == "smb_access")
+    assert smb_action.params["share"] in [
+        "\\\\fileserver01\\rd-research",
+        "\\\\fileserver01\\finance",
+        "\\\\fileserver01\\executive",
+        "\\\\fileserver01\\hr",
+    ]
+
+
+def test_resolve_injection_respects_shares_category():
+    behavior = {
+        "id": "test",
+        "steps": [{"action": "smb_access", "params": {"shares_category": "finance"}}],
+    }
+    actions = resolve_injection(
+        INJECTION_SCENARIO, "HOST-A", "run-1", datetime(2026, 1, 1), behavior, random.Random(1)
+    )
+    assert actions[0].params["share"] == "\\\\vantage-fileserver01\\finance"
+
+
+def test_resolve_injection_is_deterministic_for_the_same_rng_state():
+    actions1 = resolve_injection(
+        INJECTION_SCENARIO, "HOST-A", "run-1", datetime(2026, 1, 1), INJECTED_BEHAVIOR, random.Random(7)
+    )
+    actions2 = resolve_injection(
+        INJECTION_SCENARIO, "HOST-A", "run-1", datetime(2026, 1, 1), INJECTED_BEHAVIOR, random.Random(7)
+    )
+    assert [a.params for a in actions1] == [a.params for a in actions2]
+    assert [a.intended_start for a in actions1] == [a.intended_start for a in actions2]
+
+
+def test_resolve_window_injection_still_works_after_the_refactor():
+    # resolve_window()'s own injected_behavior handling now delegates to
+    # resolve_injection() internally -- this is the existing behavior
+    # contract (byte-identical replay, both steps flagged, chained
+    # narrative stays in order) still holding after that refactor, not a
+    # new property. See test_resolve_window_injected_behavior_is_appended_
+    # and_flagged above for the original version of this assertion.
+    _, seed1, specs1 = resolve_window(
+        WINDOW_SCENARIO, ["HOST-A"], WINDOW_START, WINDOW_END, seed=3, injected_behavior=INJECTED_BEHAVIOR
+    )
+    _, seed2, specs2 = resolve_window(
+        WINDOW_SCENARIO, ["HOST-A"], WINDOW_START, WINDOW_END, seed=3, injected_behavior=INJECTED_BEHAVIOR
+    )
+    assert [s.params for s in specs1] == [s.params for s in specs2]
+    flagged = [s for s in specs1 if s.should_alert]
+    assert len(flagged) == 2
+    assert flagged[0].intended_start < flagged[1].intended_start

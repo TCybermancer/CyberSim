@@ -440,3 +440,130 @@ def test_create_range_endpoint_persists_time_scale(client):
     resp = client.post("/ranges", json=_range_payload(time_scale=0.25))
     assert resp.status_code == 200
     assert resp.json()["time_scale"] == 0.25
+
+
+# ---- POST /ranges/{id}/hosts/{host}/fire-injection ----------------------
+
+
+def _fire_day_zero(range_id: str, now: datetime = datetime(2026, 1, 5, 8, 0, 0)):
+    """Actually launches day 0 (via the real _fire_range_day internals, same
+    as the range loop would) so a range's hosts have genuine active runs --
+    fire-injection needs a host to be mid-run, which merely creating the
+    range via POST /ranges does not provide."""
+    rng = db.get_range(range_id)
+    asyncio.run(app_module._fire_range_day(rng, now, db.get_settings()))
+
+
+def test_fire_live_injection_appends_to_the_active_run(client):
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    _fire_day_zero(range_id)
+    run_id_before = db.active_runs_for_hosts(["HOST-A"])["HOST-A"]
+
+    resp = client.post(
+        f"/ranges/{range_id}/hosts/HOST-A/fire-injection",
+        json={"behavior_id": "rnd_secrets_smb"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["run_id"] == run_id_before
+    assert len(body["actions"]) > 0
+    assert all(a["should_alert"] for a in body["actions"])
+    assert all(a["run_id"] == run_id_before for a in body["actions"])
+
+    # Recorded in the range's injection history same as a pre-staged one.
+    detail = client.get(f"/ranges/{range_id}").json()
+    assert len(detail["injections"]) == 1
+    assert detail["injections"][0]["behavior_id"] == "rnd_secrets_smb"
+    assert detail["injections"][0]["day_index"] == 0
+
+
+def test_fire_live_injection_is_delivered_on_the_agents_very_next_poll(client):
+    """The whole point: no agent-side change needed, it rides the same
+    dispatched=0/intended_start<=now mechanism as any other pending action."""
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    _fire_day_zero(range_id)
+
+    resp = client.post(
+        f"/ranges/{range_id}/hosts/HOST-A/fire-injection",
+        json={"behavior_id": "rnd_secrets_smb"},
+    )
+    injected_action_ids = {a["action_id"] for a in resp.json()["actions"]}
+
+    from test_app import agent_auth
+
+    polled = client.get("/agents/HOST-A/poll", headers=agent_auth("HOST-A")).json()["actions"]
+    polled_should_alert_ids = {a["action_id"] for a in polled if a["should_alert"]}
+    assert injected_action_ids <= polled_should_alert_ids
+
+
+def test_fire_live_injection_host_not_mid_run_409s(client):
+    # Range created but day 0 never fired -- no active run for HOST-A yet.
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    resp = client.post(
+        f"/ranges/{range_id}/hosts/HOST-A/fire-injection",
+        json={"behavior_id": "rnd_secrets_smb"},
+    )
+    assert resp.status_code == 409
+
+
+def test_fire_live_injection_unknown_host_404s(client):
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    _fire_day_zero(range_id)
+    resp = client.post(
+        f"/ranges/{range_id}/hosts/NOT-A-HOST/fire-injection",
+        json={"behavior_id": "rnd_secrets_smb"},
+    )
+    assert resp.status_code == 404
+
+
+def test_fire_live_injection_unknown_behavior_404s(client):
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    _fire_day_zero(range_id)
+    resp = client.post(
+        f"/ranges/{range_id}/hosts/HOST-A/fire-injection",
+        json={"behavior_id": "not_a_real_behavior"},
+    )
+    assert resp.status_code == 404
+
+
+def test_fire_live_injection_unknown_range_404s(client):
+    resp = client.post(
+        "/ranges/not-a-real-range/hosts/HOST-A/fire-injection",
+        json={"behavior_id": "rnd_secrets_smb"},
+    )
+    assert resp.status_code == 404
+
+
+def test_fire_live_injection_twice_same_day_409s(client):
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    _fire_day_zero(range_id)
+    payload = {"behavior_id": "rnd_secrets_smb"}
+    assert client.post(f"/ranges/{range_id}/hosts/HOST-A/fire-injection", json=payload).status_code == 200
+    assert client.post(f"/ranges/{range_id}/hosts/HOST-A/fire-injection", json=payload).status_code == 409
+
+
+def test_fire_live_injection_blocked_by_an_earlier_pre_staged_one(client):
+    # A pre-staged (not-yet-fired-day) manual injection for TODAY, created
+    # before the day launched, must also block a live fire for that same
+    # day once it does launch -- same one-per-host-per-day rule either way.
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    client.post(
+        f"/ranges/{range_id}/injections",
+        json={"host": "HOST-A", "day_index": 0, "behavior_id": "rnd_secrets_smb"},
+    )
+    _fire_day_zero(range_id)
+    resp = client.post(
+        f"/ranges/{range_id}/hosts/HOST-A/fire-injection",
+        json={"behavior_id": "hidden_file_staging_exfil"},
+    )
+    assert resp.status_code == 409
+
+
+def test_viewer_cannot_fire_live_injection(viewer_client, client):
+    range_id = client.post("/ranges", json=_range_payload()).json()["range_id"]
+    _fire_day_zero(range_id)
+    resp = viewer_client.post(
+        f"/ranges/{range_id}/hosts/HOST-A/fire-injection",
+        json={"behavior_id": "rnd_secrets_smb"},
+    )
+    assert resp.status_code == 403

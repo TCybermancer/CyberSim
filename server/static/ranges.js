@@ -360,6 +360,19 @@ async function selectRange(rangeId) {
       .map((b) => `<option value="${b.id}">${escapeHtml(b.label)} (${b.category})</option>`)
       .join("");
   }
+
+  // Independent of injection_mode -- a live fire is always an explicit,
+  // on-demand operator action, whether the range's day-to-day mode is
+  // "manual" (pre-staging) or "auto" (rare daily roll).
+  const canFireLive = isAdmin && detail.enabled;
+  $("range-live-injection-block").style.display = canFireLive ? "" : "none";
+  if (canFireLive) {
+    $("live-injection-host-select").innerHTML = detail.hosts.map((h) => `<option value="${escapeHtml(h.host)}">${escapeHtml(h.host)}</option>`).join("");
+    const behaviors = await loadSuspiciousBehaviorsOnce();
+    $("live-injection-behavior-select").innerHTML = behaviors
+      .map((b) => `<option value="${b.id}">${escapeHtml(b.label)} (${b.category})</option>`)
+      .join("");
+  }
 }
 
 function setupInjectionForm() {
@@ -394,6 +407,38 @@ function setupInjectionForm() {
   });
 }
 
+function setupLiveInjectionForm() {
+  $("live-injection-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!selectedRangeId) return;
+    const result = $("live-injection-result");
+    const submitBtn = $("live-injection-submit-btn");
+
+    const host = $("live-injection-host-select").value;
+    const behaviorSelect = $("live-injection-behavior-select");
+    const behaviorLabel = behaviorSelect.options[behaviorSelect.selectedIndex]?.textContent || behaviorSelect.value;
+
+    if (!confirm(`Fire "${behaviorLabel}" against ${host} right now? This can't be undone.`)) return;
+
+    submitBtn.disabled = true;
+    try {
+      const resp = await api(`/ranges/${selectedRangeId}/hosts/${encodeURIComponent(host)}/fire-injection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ behavior_id: behaviorSelect.value }),
+      });
+      result.textContent = `fired -- ${resp.actions.length} action(s) queued for ${host}'s next poll`;
+      result.className = "result success";
+      await selectRange(selectedRangeId);
+    } catch (err) {
+      result.textContent = `couldn't fire injection: ${err.message}`;
+      result.className = "result error";
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+}
+
 // ---- init -------------------------------------------------------------
 
 (async function init() {
@@ -404,5 +449,6 @@ function setupInjectionForm() {
   setupRangeForm();
   setupRangesTable();
   setupInjectionForm();
+  setupLiveInjectionForm();
   await Promise.all([loadScenarioOptions(), loadKnownHosts(), loadRanges()]);
 })();

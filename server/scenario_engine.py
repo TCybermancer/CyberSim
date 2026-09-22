@@ -380,8 +380,6 @@ def resolve_window(
         seed = random.SystemRandom().randint(0, 2**32 - 1)
     rng = random.Random(seed)
 
-    merged_substitutions = {**_DEFAULT_SUBSTITUTIONS, **(substitutions or {})}
-
     run_id = str(uuid.uuid4())
     persona = scenario["persona"]
     org = scenario.get("org")
@@ -429,33 +427,74 @@ def resolve_window(
             )
 
         if injected_behavior is not None:
-            cursor = window_start + (window_end - window_start) * rng.random()
-            for step in injected_behavior.get("steps", []):
-                cursor += _resolve_duration({"duration": step.get("delay_before", "0s")}, rng)
-
-                params = {
-                    k: (_substitute_placeholders(v, rng, merged_substitutions) if isinstance(v, str) else v)
-                    for k, v in step.get("params", {}).items()
-                }
-                target = _resolve_target(step, rng)
-                if target is not None:
-                    params["target"] = target
-                _resolve_share(params, org, rng)
-
-                duration = _resolve_duration(step, rng)
-                actions.append(
-                    ActionSpec(
-                        run_id=run_id,
-                        persona=persona,
-                        host=host,
-                        action_type=ActionType(step["action"]),
-                        params={**params, "duration_seconds": duration.total_seconds()},
-                        intended_start=cursor,
-                        should_alert=True,
-                        expected_artifacts=step.get("expected_artifacts", []),
-                    )
-                )
-                cursor += duration
+            anchor = window_start + (window_end - window_start) * rng.random()
+            actions.extend(
+                resolve_injection(scenario, host, run_id, anchor, injected_behavior, rng, substitutions)
+            )
 
     actions.sort(key=lambda a: (a.host, a.intended_start))
     return run_id, seed, actions
+
+
+def resolve_injection(
+    scenario: dict[str, Any],
+    host: str,
+    run_id: str,
+    anchor_time: datetime,
+    behavior: dict[str, Any],
+    rng: random.Random,
+    substitutions: dict[str, list[str] | str] | None = None,
+) -> list[ActionSpec]:
+    """Resolves one suspicious_behaviors.yaml entry into a chained mini
+    cursor-walk of ActionSpecs anchored at anchor_time, every one
+    should_alert=True -- factored out of resolve_window()'s own
+    injected_behavior handling (which still calls this, anchoring at a
+    random point in the day's window) so a second caller can anchor it
+    at "right now" instead: a red-team operator firing a live,
+    mid-run injection against a host that's already active (see
+    app.py's POST .../fire-injection), rather than only being able to
+    pre-stage one for a day that hasn't launched yet (POST
+    /ranges/{id}/injections). Same {{placeholder}} substitution,
+    targets_category/shares_category resolution, and should_alert=True
+    forcing as resolve_window()'s own injection handling -- one
+    implementation, two anchor strategies.
+
+    Takes rng directly (not a seed) so resolve_window() can keep
+    threading its own live rng instance through for byte-identical
+    replay given the day's seed; a fresh caller (the live-fire endpoint)
+    just passes a newly constructed random.Random() since a live,
+    operator-triggered injection was never part of any seed's replay
+    contract to begin with."""
+    merged_substitutions = {**_DEFAULT_SUBSTITUTIONS, **(substitutions or {})}
+    persona = scenario["persona"]
+    org = scenario.get("org")
+    actions: list[ActionSpec] = []
+    cursor = anchor_time
+    for step in behavior.get("steps", []):
+        cursor += _resolve_duration({"duration": step.get("delay_before", "0s")}, rng)
+
+        params = {
+            k: (_substitute_placeholders(v, rng, merged_substitutions) if isinstance(v, str) else v)
+            for k, v in step.get("params", {}).items()
+        }
+        target = _resolve_target(step, rng)
+        if target is not None:
+            params["target"] = target
+        _resolve_share(params, org, rng)
+
+        duration = _resolve_duration(step, rng)
+        actions.append(
+            ActionSpec(
+                run_id=run_id,
+                persona=persona,
+                host=host,
+                action_type=ActionType(step["action"]),
+                params={**params, "duration_seconds": duration.total_seconds()},
+                intended_start=cursor,
+                should_alert=True,
+                expected_artifacts=step.get("expected_artifacts", []),
+            )
+        )
+        cursor += duration
+
+    return actions

@@ -302,6 +302,34 @@ for quick single-run testing.
     itself. Uses plain `random`, not `scenario_engine`'s seeded rng:
     whether today has an incident at all is a range-loop policy decision,
     not part of `resolve_window()`'s deterministic-replay contract.
+- **Live injection firing** (`POST /ranges/{id}/hosts/{host}/fire-
+  injection`, `scenario_engine.resolve_injection()`): both injection
+  modes above are "ahead of time" -- `_resolve_injection()` is only ever
+  consulted when `_fire_range_day()` launches a (host, day)'s ActionSpecs
+  in one batch, so a `range_injections` row created *after* that has
+  already happened does nothing until the day advances. That's fine for
+  planning ahead, but not for a red-team operator actively working a
+  target mid-engagement who wants to fire something at a host *right
+  now*, not wait for tomorrow. This is the same problem the mail/SMB
+  server overrides solve for a different kind of "change take effect
+  without restarting anything": agents already poll for fresh
+  ActionSpecs every cycle (`db.pending_actions_for_host` hands out
+  anything with `dispatched=0` and `intended_start <= now`, whichever
+  endpoint inserted the row), so inserting new ones straight into a
+  host's already-active run works with zero agent-side change.
+  `resolve_injection()` -- factored out of `resolve_window()`'s own
+  injected-behavior handling, which now just calls it with a random
+  in-window anchor -- takes an explicit `anchor_time` instead, so the
+  live-fire endpoint anchors it at `datetime.utcnow()`. Requires the
+  target host to actually have an active run belonging to this range
+  (nothing sensible to anchor "now" against otherwise) and is subject to
+  the same one-per-host-per-day rule as pre-staged injections (blocks a
+  second live fire, and is itself blocked by an earlier pre-staged or
+  auto-rolled one for that day) -- can't be used to stack multiple "true
+  positives" onto one day. `server/static/ranges.html`/`ranges.js`'s
+  "Fire a live injection" block wires this into the range detail view,
+  independent of `injection_mode` (a live fire is always an explicit
+  operator action, whichever day-to-day mode a range is running).
 - **`after_hours_eligible: true`** (a new, otherwise-inert top-level
   scenario YAML field, same precedent as `org`/`department`) widens the
   *base* schedule's effective window by `AFTER_HOURS_EARLY_BUFFER`/

@@ -300,6 +300,12 @@ def save_run(
         )
 
 
+def get_run(run_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
+
 def save_action_specs(specs: list[dict]):
     with get_conn() as conn:
         conn.executemany(

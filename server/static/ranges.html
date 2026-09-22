@@ -192,6 +192,29 @@
         </form>
         <div id="injection-result" class="result"></div>
       </div>
+
+      <div id="range-live-injection-block" style="display:none">
+        <h2 style="font-size:0.85rem; margin-top:1rem">Fire a live injection</h2>
+        <p class="hint" style="margin-top:0">
+          Fire a suspicious_behaviors.yaml entry against a host <strong>right now</strong>,
+          instead of pre-staging one for a day that hasn't launched yet — for targeting a
+          persona mid-run during an active red-team engagement. Only works on a host that's
+          currently mid-run (today's day already launched); still one injection per host per
+          day, same as above.
+        </p>
+        <form id="live-injection-form">
+          <label>
+            Host
+            <select id="live-injection-host-select"></select>
+          </label>
+          <label>
+            Behavior
+            <select id="live-injection-behavior-select"></select>
+          </label>
+          <button type="submit" id="live-injection-submit-btn">Fire now</button>
+        </form>
+        <div id="live-injection-result" class="result"></div>
+      </div>
     </div>
   </section>
 </main>
@@ -201,6 +224,6 @@
 <script src="theme.js?v=1"></script>
 <script src="auth.js?v=4"></script>
 <script src="icons.js?v=1"></script>
-<script src="ranges.js?v=1"></script>
+<script src="ranges.js?v=2"></script>
 </body>
 </html>
