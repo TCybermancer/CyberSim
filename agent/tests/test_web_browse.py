@@ -6,6 +6,8 @@ real browser -- that was verified by hand (see docs/README.md
 "web_browse")."""
 
 import os
+from types import SimpleNamespace
+from actions import web_browse
 
 import pytest
 
@@ -42,7 +44,7 @@ def test_detects_installed_chrome_on_windows(monkeypatch, tmp_path):
     chrome = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
     chrome.parent.mkdir(parents=True)
     chrome.touch()
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(web_browse, 'os', SimpleNamespace(name='nt', environ=os.environ))
     monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
     monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
 
@@ -50,7 +52,7 @@ def test_detects_installed_chrome_on_windows(monkeypatch, tmp_path):
 
 
 def test_returns_none_when_no_system_browser_is_installed(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(web_browse, 'os', SimpleNamespace(name='nt', environ=os.environ))
     monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
     monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
 
