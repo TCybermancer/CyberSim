@@ -133,6 +133,24 @@
               </label>
             </div>
 
+            <h2 style="font-size:0.85rem; margin-top:1.1rem">SMB file server</h2>
+            <p class="hint" style="margin-top:0">
+              Every <code>smb_access</code> step still resolves to one of the department shares in
+              <code>server/smb_shares.yaml</code> (via a scenario's own <code>share</code> or
+              <code>shares_category</code>) — this only overrides the file server <em>host</em> that
+              resolved share actually points at, so a live deployment can send every org's SMB
+              traffic to one real file server without editing 100+ scenario files. Applies to every
+              run launched after you save this, replays included, with no agent reinstall needed.
+              Leave blank and each resolved share's hostname (e.g. <code>vantage-fileserver01</code>)
+              is used as-is.
+            </p>
+            <div class="row">
+              <label>
+                Host
+                <input id="smb-server-override-input" type="text" placeholder="prod-fileserver.range.local">
+              </label>
+            </div>
+
             <button type="submit">Save settings</button>
           </form>
           <div id="settings-result" class="result"></div>

@@ -109,6 +109,42 @@ def _resolve_target(step: dict, rng: random.Random) -> str | None:
     return None
 
 
+SMB_SHARES_PATH = Path(__file__).parent / "smb_shares.yaml"
+
+
+def _load_smb_shares() -> dict[str, dict[str, str]]:
+    """Loaded fresh on every call -- same tradeoff as
+    _load_website_categories()."""
+    with open(SMB_SHARES_PATH) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _resolve_share(params: dict, org: str | None, rng: random.Random) -> None:
+    """Mutates an smb_access step's params in place: `shares_category:
+    <department>` (or the literal 'random' to pick any department in
+    this scenario's own org) resolves against server/smb_shares.yaml's
+    pool for this scenario's own `org:` field, via the same seeded
+    rng.choice() used elsewhere -- so a Finance persona at one org and
+    one at another always land on their own org's finance share, never
+    each other's. A literal `share` already in params wins -- both set
+    is a hard error, same convention as _resolve_target()."""
+    category = params.pop("shares_category", None)
+    if category is None:
+        return
+    if params.get("share"):
+        raise ValueError(f"params has both 'share' and 'shares_category: {category}' -- use only one")
+    org_shares = _load_smb_shares().get(org or "")
+    if not org_shares:
+        raise ValueError(f"no smb_shares.yaml pool for org '{org}' (see server/smb_shares.yaml)")
+    if category == "random":
+        params["share"] = rng.choice(list(org_shares.values()))
+        return
+    share = org_shares.get(category)
+    if not share:
+        raise ValueError(f"unknown shares_category '{category}' for org '{org}' (see server/smb_shares.yaml)")
+    params["share"] = share
+
+
 def _resolve_duration(spec: dict, rng: random.Random) -> timedelta:
     """Parse a 'duration: 5-15m' style range (or a bare fixed value like
     '0s', with no '-') and sample a value from it. Every scenario file
@@ -156,6 +192,7 @@ def resolve(
 
     run_id = str(uuid.uuid4())
     persona = scenario["persona"]
+    org = scenario.get("org")
     actions: list[ActionSpec] = []
 
     for host in hosts:
@@ -168,6 +205,7 @@ def resolve(
             target = _resolve_target(step, rng)
             if target is not None:
                 params["target"] = target
+            _resolve_share(params, org, rng)
 
             duration = _resolve_duration(step, rng)
 
@@ -302,6 +340,7 @@ def resolve_window(
 
     run_id = str(uuid.uuid4())
     persona = scenario["persona"]
+    org = scenario.get("org")
     actions: list[ActionSpec] = []
 
     if after_hours_eligible:
@@ -319,6 +358,7 @@ def resolve_window(
             target = _resolve_target(step, rng)
             if target is not None:
                 params["target"] = target
+            _resolve_share(params, org, rng)
 
             actions.append(
                 ActionSpec(
@@ -355,6 +395,7 @@ def resolve_window(
                 target = _resolve_target(step, rng)
                 if target is not None:
                     params["target"] = target
+                _resolve_share(params, org, rng)
 
                 duration = _resolve_duration(step, rng)
                 actions.append(

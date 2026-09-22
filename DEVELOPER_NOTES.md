@@ -235,6 +235,23 @@ for quick single-run testing.
   same step is a hard error (which one should win would be arbitrary),
   as is an unrecognized category name -- both fail loud rather than
   silently doing something unintended.
+- **`shares_category`** (`server/smb_shares.yaml`,
+  `scenario_engine._resolve_share()`): the `smb_access` analogue of
+  `targets_category`, but org-scoped rather than global -- an
+  `smb_access` step's `params.shares_category: <department>` resolves
+  against *this scenario's own* `org:` field, so a Finance persona at
+  Vantage Corp and one at Metro Regional Hospital always land on their
+  own org's finance share, never each other's. `shares_category: random`
+  picks any department's share within that same org (still via the
+  seeded rng, still deterministic per seed) -- for a step that
+  plausibly moves a file between directorates rather than staying in
+  its own. `params.share` already set is a hard error, same convention
+  as `targets`/`targets_category`. The pool itself is exactly the
+  per-department UNC paths already hand-written across
+  `server/scenarios/*.yaml`, pulled into one shared file rather than
+  duplicated -- not new/invented infrastructure. See "SMB file server
+  override" below for how a live deployment points every org's traffic
+  at one real file server without editing every scenario file.
 - **Two ways a day gets an injection**, both landing in the same
   `range_injections` table so downstream handling doesn't care which:
   - `injection_mode: "manual"` -- a red-team operator picks an exact

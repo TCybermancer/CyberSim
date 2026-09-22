@@ -155,6 +155,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- reinstall needed -- agents already poll for fresh ActionSpecs every
 -- run, this just rides that same mechanism. Unset falls back to
 -- whatever each agent's own config.yaml smtp: block says.
+--
+-- smb_server_override: same idea, for smb_access -- a scenario's own
+-- share/shares_category (server/smb_shares.yaml) still decides WHICH
+-- department's share a step targets, but the actual host portion of
+-- every resolved share's UNC path gets rewritten to this at run-launch
+-- time (see app.py's _apply_smb_server_override), so pointing a live
+-- deployment at one real file server doesn't need editing 100+
+-- scenario files' hand-written \\org-fileserver01\... paths. Unset
+-- leaves each resolved share's UNC path exactly as scenario_engine
+-- produced it.
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     network_mode TEXT NOT NULL DEFAULT 'airgapped' CHECK (network_mode IN ('airgapped', 'connected')),
@@ -174,6 +184,7 @@ CREATE TABLE IF NOT EXISTS settings (
     remote_install_server_url TEXT,
     mail_server_host TEXT,
     mail_server_port INTEGER,
+    smb_server_override TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -266,6 +277,9 @@ def init_db():
         # app.py), NULL for any host that's only ever polled without a
         # full register since upgrading. See GET /updates/check.
         _ensure_column(conn, "agents", "agent_version", "TEXT")
+        # settings predates the SMB server override -- see this table's
+        # own comment above and app.py's _apply_smb_server_override.
+        _ensure_column(conn, "settings", "smb_server_override", "TEXT")
 
 
 def save_run(
@@ -584,6 +598,7 @@ _DEFAULT_SETTINGS = {
     "remote_install_server_url": None,
     "mail_server_host": None,
     "mail_server_port": None,
+    "smb_server_override": None,
 }
 
 
@@ -614,8 +629,9 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                  openai_api_key, openai_model, local_base_url, local_api_key, local_model,
                  remote_linux_ssh_user, remote_linux_ssh_private_key, remote_linux_ssh_password,
                  remote_windows_winrm_user, remote_windows_winrm_password,
-                 remote_install_server_url, mail_server_host, mail_server_port, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 remote_install_server_url, mail_server_host, mail_server_port,
+                 smb_server_override, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 network_mode=excluded.network_mode, llm_provider=excluded.llm_provider,
                 anthropic_api_key=excluded.anthropic_api_key, anthropic_model=excluded.anthropic_model,
@@ -630,6 +646,7 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                 remote_install_server_url=excluded.remote_install_server_url,
                 mail_server_host=excluded.mail_server_host,
                 mail_server_port=excluded.mail_server_port,
+                smb_server_override=excluded.smb_server_override,
                 updated_at=excluded.updated_at
             """,
             (
@@ -650,6 +667,7 @@ def update_settings(updates: dict, updated_at: str) -> dict:
                 merged["remote_install_server_url"],
                 merged["mail_server_host"],
                 merged["mail_server_port"],
+                merged["smb_server_override"],
                 updated_at,
             ),
         )

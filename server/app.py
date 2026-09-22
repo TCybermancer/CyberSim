@@ -369,6 +369,7 @@ def _mask_settings(s: dict) -> dict:
         "remote_install_server_url": s.get("remote_install_server_url"),
         "mail_server_host": s.get("mail_server_host"),
         "mail_server_port": s.get("mail_server_port"),
+        "smb_server_override": s.get("smb_server_override"),
         "updated_at": s.get("updated_at"),
     }
 
@@ -400,6 +401,7 @@ class SettingsUpdateRequest(BaseModel):
     remote_install_server_url: str | None = None
     mail_server_host: str | None = None
     mail_server_port: int | None = Field(default=None, ge=1, le=65535)
+    smb_server_override: str | None = None
 
 
 @app.put("/settings", dependencies=[Depends(require_admin)])
@@ -579,6 +581,41 @@ def _apply_mail_server_override(specs: list[ActionSpec], settings: dict) -> None
             spec.params["smtp_port"] = port
 
 
+def _rewrite_share_server(share: str, override_host: str) -> str:
+    """Replaces a UNC share's server component with override_host,
+    keeping the rest of the path intact -- e.g.
+    \\\\vantage-fileserver01\\finance -> \\\\<override_host>\\finance."""
+    parts = [p for p in share.replace("/", "\\").split("\\") if p]
+    if not parts:
+        return share
+    parts[0] = override_host
+    return "\\\\" + "\\".join(parts)
+
+
+def _apply_smb_server_override(specs: list[ActionSpec], settings: dict) -> None:
+    """Mutates every smb_access spec's params["share"] in place, rewriting
+    just the UNC path's server component to Settings -> General's "SMB
+    file server" override, if configured (see db.py's settings table
+    comment). scenario_engine's own share/shares_category resolution
+    (server/smb_shares.yaml) still decides which department's share a
+    step targets -- this only changes which physical file server that
+    resolves to, the same division of responsibility as
+    _apply_mail_server_override for the mail relay's address vs.
+    email_send's own subject/body/recipient. Same
+    applies-to-every-launch, not-a-determinism-concern reasoning too:
+    which server actually receives the traffic was never part of
+    resolve()'s byte-identical-given-the-same-seed guarantee."""
+    override = settings.get("smb_server_override")
+    if not override:
+        return
+    for spec in specs:
+        if spec.action_type != ActionType.SMB_ACCESS:
+            continue
+        share = spec.params.get("share")
+        if share:
+            spec.params["share"] = _rewrite_share_server(share, override)
+
+
 async def _launch_run(scenario_name: str, hosts: list[str], start_time: datetime, seed: int | None):
     """Core of starting a run -- shared by POST /runs and the recurring-
     schedule background loop below, so there's exactly one place that
@@ -602,10 +639,11 @@ async def _launch_run(scenario_name: str, hosts: list[str], start_time: datetime
 
     settings = db.get_settings()
 
-    # Mail server override applies to every launch, seeded replay
-    # included -- see _apply_mail_server_override's own docstring for
-    # why that's fine determinism-wise.
+    # Mail server / SMB server overrides apply to every launch, seeded
+    # replay included -- see their own docstrings for why that's fine
+    # determinism-wise.
     _apply_mail_server_override(specs, settings)
+    _apply_smb_server_override(specs, settings)
 
     # Live content generation only for genuinely fresh launches: an
     # explicit seed means the caller wants an exact replay, and
@@ -871,6 +909,7 @@ async def _fire_range_day(rng: dict, now: datetime, settings: dict):
             substitutions=substitutions,
         )
         _apply_mail_server_override(specs, settings)
+        _apply_smb_server_override(specs, settings)
         db.save_run(
             run_id,
             h["scenario_name"],

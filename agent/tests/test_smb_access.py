@@ -1,15 +1,16 @@
 """Tests for actions/smb_access.py's local file-I/O helpers (_browse,
-_copy_file) against a plain temp directory -- these are OS/protocol
-agnostic (a real UNC/SMB mount is just another Path to them), so this
-covers the same logic verified by hand against a real share (Windows'
-loopback C$ admin share -- see docs/README.md "smb_access") without
-needing one. The Windows `net use` / Linux `mount.cifs` branches in
-execute() itself aren't exercised here since they need a real OS
-mechanism -- see the module docstring for their own testing status."""
+_copy_file, _publish_file) against a plain temp directory -- these are
+OS/protocol agnostic (a real UNC/SMB mount is just another Path to
+them), so this covers the same logic verified by hand against a real
+share (Windows' loopback C$ admin share -- see docs/README.md
+"smb_access") without needing one. The Windows `net use` / Linux
+`mount.cifs` branches in execute() itself aren't exercised here since
+they need a real OS mechanism -- see the module docstring for their own
+testing status."""
 
 import pytest
 
-from actions.smb_access import _browse, _copy_file, _hash_file
+from actions.smb_access import _browse, _copy_file, _hash_file, _publish_file
 
 
 @pytest.fixture
@@ -55,3 +56,45 @@ def test_copy_file_creates_dest_dir_if_missing(share, tmp_path):
     dest = tmp_path / "nested" / "downloads"
     _copy_file(share, dest, "notes.txt")
     assert dest.exists()
+
+
+# --- _publish_file / _require_bare_filename -----------------------------
+
+
+@pytest.fixture
+def local_source(tmp_path):
+    source_dir = tmp_path / "smb_downloads"
+    source_dir.mkdir()
+    (source_dir / "handoff.txt").write_text("directorate handoff placeholder")
+    return source_dir
+
+
+def test_publish_file_uploads_to_the_share(local_source, tmp_path):
+    dest_share = tmp_path / "share"
+    dest_share.mkdir()
+
+    result = _publish_file(dest_share, local_source, "handoff.txt")
+
+    assert result["published_file"] == "handoff.txt"
+    assert (dest_share / "handoff.txt").read_text() == "directorate handoff placeholder"
+    assert result["bytes_published"] == len("directorate handoff placeholder")
+    assert result["file_hash"] == _hash_file(dest_share / "handoff.txt")
+
+
+def test_publish_file_missing_local_file_raises(local_source, tmp_path):
+    dest_share = tmp_path / "share"
+    dest_share.mkdir()
+    with pytest.raises(RuntimeError, match="not found"):
+        _publish_file(dest_share, local_source, "does_not_exist.txt")
+
+
+@pytest.mark.parametrize("bad_name", ["../etc/passwd", "sub/dir/file.txt", "..", ".", ""])
+def test_publish_file_rejects_path_components(local_source, tmp_path, bad_name):
+    # Regression guard: unlike copy_file (safe by construction -- it only
+    # ever matches an already-listed iterdir() entry), publish_file
+    # builds its destination directly from the given name, so a
+    # traversal name must be rejected before any Path join happens.
+    dest_share = tmp_path / "share"
+    dest_share.mkdir()
+    with pytest.raises(ValueError, match="bare name"):
+        _publish_file(dest_share, local_source, bad_name)

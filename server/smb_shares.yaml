@@ -1,0 +1,98 @@
+# Per-org SMB share pools for smb_access steps (see
+# scenario_engine.py's _resolve_share()). A step can use
+# `shares_category: <department>` instead of hand-writing a `share:`
+# path -- resolves against this scenario's own `org:` field, so a
+# Finance persona at "Vantage Corp" and one at "Metro Regional Hospital"
+# land on their own org's finance share, never each other's.
+# `shares_category: random` picks any department's share within the
+# same org via the same seeded rng.choice() used elsewhere, for a step
+# that plausibly reaches outside its own department (or as a directorate-
+# to-directorate file-movement narrative -- see DEVELOPER_NOTES.md
+# "Ranges"/"targets_category").
+#
+# These are the exact per-department share paths already hand-written
+# across server/scenarios/*.yaml, pulled together into one shared pool
+# rather than duplicated -- not new/invented infrastructure. Each org
+# has exactly one file server today (fileserver01 / vantage-fileserver01
+# / mes-fileserver01 / mrh-fileserver01 / meridian-fileserver01); a
+# scenario file's own hand-written `share:` for its own department
+# still works unchanged and takes precedence if both are given (a hard
+# error, not a silent pick -- see _resolve_share()).
+
+"Meridian Logistics":
+  customer-service: "\\\\meridian-fileserver01\\customer-service"
+  executive: "\\\\meridian-fileserver01\\executive"
+  finance: "\\\\meridian-fileserver01\\finance"
+  fleet: "\\\\meridian-fileserver01\\fleet"
+  hr: "\\\\meridian-fileserver01\\hr"
+  it: "\\\\meridian-fileserver01\\it"
+  supply-chain: "\\\\meridian-fileserver01\\supply-chain"
+  transportation: "\\\\meridian-fileserver01\\transportation"
+  warehouse: "\\\\meridian-fileserver01\\warehouse"
+
+"Metro Airport":
+  airfield-ops: "\\\\fileserver01\\airfield-ops"
+  atc-tower: "\\\\fileserver01\\atc-tower"
+  badge-office: "\\\\fileserver01\\badge-office"
+  cctv: "\\\\fileserver01\\cctv"
+  executive: "\\\\fileserver01\\executive"
+  finance: "\\\\fileserver01\\finance"
+  gate-ops: "\\\\fileserver01\\gate-ops"
+  ground-transportation: "\\\\fileserver01\\ground-transportation"
+  hr: "\\\\fileserver01\\hr"
+  it: "\\\\fileserver01\\it"
+  it-admin: "\\\\fileserver01\\it-admin"
+  it-systems: "\\\\fileserver01\\it-systems"
+  legal: "\\\\fileserver01\\legal"
+  lost-and-found: "\\\\fileserver01\\lost-and-found"
+  network-ops: "\\\\fileserver01\\network-ops"
+  operations: "\\\\fileserver01\\operations"
+  police-records: "\\\\fileserver01\\police-records"
+  ramp-ops: "\\\\fileserver01\\ramp-ops"
+  security-ops: "\\\\fileserver01\\security-ops"
+  soc: "\\\\fileserver01\\soc"
+  terminal-ops: "\\\\fileserver01\\terminal-ops"
+
+"Metro Emergency Services":
+  admin: "\\\\mes-fileserver01\\admin"
+  administration: "\\\\mes-fileserver01\\administration"
+  detectives: "\\\\mes-fileserver01\\detectives"
+  dispatch: "\\\\mes-fileserver01\\dispatch"
+  ems: "\\\\mes-fileserver01\\ems"
+  ems-records: "\\\\mes-fileserver01\\ems-records"
+  evidence: "\\\\mes-fileserver01\\evidence"
+  executive: "\\\\mes-fileserver01\\executive"
+  fire: "\\\\mes-fileserver01\\fire"
+  gis: "\\\\mes-fileserver01\\gis"
+  hr: "\\\\mes-fileserver01\\hr"
+  it: "\\\\mes-fileserver01\\it"
+  patrol: "\\\\mes-fileserver01\\patrol"
+  payroll: "\\\\mes-fileserver01\\payroll"
+  police: "\\\\mes-fileserver01\\police"
+  records: "\\\\mes-fileserver01\\records"
+  traffic: "\\\\mes-fileserver01\\traffic"
+
+"Metro Regional Hospital":
+  administration: "\\\\mrh-fileserver01\\administration"
+  biomed: "\\\\mrh-fileserver01\\biomed"
+  clinical: "\\\\mrh-fileserver01\\clinical"
+  executive: "\\\\mrh-fileserver01\\executive"
+  finance: "\\\\mrh-fileserver01\\finance"
+  hr: "\\\\mrh-fileserver01\\hr"
+  it: "\\\\mrh-fileserver01\\it"
+  laboratory: "\\\\mrh-fileserver01\\laboratory"
+  pharmacy: "\\\\mrh-fileserver01\\pharmacy"
+  radiology: "\\\\mrh-fileserver01\\radiology"
+  security: "\\\\mrh-fileserver01\\security"
+
+"Vantage Corp":
+  engineering: "\\\\vantage-fileserver01\\engineering"
+  executive: "\\\\vantage-fileserver01\\executive"
+  finance: "\\\\vantage-fileserver01\\finance"
+  hr: "\\\\vantage-fileserver01\\hr"
+  it: "\\\\vantage-fileserver01\\it"
+  legal: "\\\\vantage-fileserver01\\legal"
+  marketing: "\\\\vantage-fileserver01\\marketing"
+  sales: "\\\\vantage-fileserver01\\sales"
+  security: "\\\\vantage-fileserver01\\security"
+

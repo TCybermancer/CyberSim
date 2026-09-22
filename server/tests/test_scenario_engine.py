@@ -319,3 +319,105 @@ def test_targets_and_targets_category_together_raises():
     start = datetime(2026, 1, 1, 12, 0, 0)
     with pytest.raises(ValueError, match="both 'targets' and 'targets_category"):
         resolve(scenario, ["HOST-A"], start, seed=1)
+
+
+# --- shares_category (shared smb_shares.yaml pools, per org) -----------
+
+SHARE_CATEGORY_SCENARIO = {
+    "persona": "test_persona",
+    "org": "Vantage Corp",
+    "schedule": [
+        {
+            "action": "smb_access",
+            "delay_before": "0s",
+            "params": {"shares_category": "finance", "ops": ["browse"]},
+            "duration": "1s",
+        },
+    ],
+}
+
+
+def test_shares_category_resolves_to_the_named_departments_share():
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    _, _, specs = resolve(SHARE_CATEGORY_SCENARIO, ["HOST-A"], start, seed=1)
+
+    assert specs[0].params["share"] == "\\\\vantage-fileserver01\\finance"
+    assert "shares_category" not in specs[0].params
+
+
+def test_shares_category_random_stays_within_the_scenarios_own_org():
+    from scenario_engine import _load_smb_shares
+
+    scenario = {
+        **SHARE_CATEGORY_SCENARIO,
+        "schedule": [
+            {
+                "action": "smb_access",
+                "params": {"shares_category": "random", "ops": ["browse"]},
+            }
+        ],
+    }
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    vantage_shares = set(_load_smb_shares()["Vantage Corp"].values())
+
+    for seed in range(10):
+        _, _, specs = resolve(scenario, ["HOST-A"], start, seed=seed)
+        assert specs[0].params["share"] in vantage_shares
+
+
+def test_shares_category_is_deterministic_for_a_given_seed():
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    scenario = {
+        **SHARE_CATEGORY_SCENARIO,
+        "schedule": [{"action": "smb_access", "params": {"shares_category": "random"}}],
+    }
+    _, _, specs1 = resolve(scenario, ["HOST-A"], start, seed=7)
+    _, _, specs2 = resolve(scenario, ["HOST-A"], start, seed=7)
+
+    assert specs1[0].params["share"] == specs2[0].params["share"]
+
+
+def test_shares_category_works_through_resolve_window_too():
+    start = datetime(2026, 1, 1, 9, 0, 0)
+    end = datetime(2026, 1, 1, 17, 0, 0)
+    _, _, specs = resolve_window(SHARE_CATEGORY_SCENARIO, ["HOST-A"], start, end, seed=1)
+
+    assert specs[0].params["share"] == "\\\\vantage-fileserver01\\finance"
+
+
+def test_unknown_shares_category_raises():
+    scenario = {
+        "persona": "test_persona",
+        "org": "Vantage Corp",
+        "schedule": [{"action": "smb_access", "params": {"shares_category": "not_a_real_department"}}],
+    }
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    with pytest.raises(ValueError, match="unknown shares_category"):
+        resolve(scenario, ["HOST-A"], start, seed=1)
+
+
+def test_shares_category_for_unknown_org_raises():
+    scenario = {
+        "persona": "test_persona",
+        "org": "Not A Real Org",
+        "schedule": [{"action": "smb_access", "params": {"shares_category": "finance"}}],
+    }
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    with pytest.raises(ValueError, match="no smb_shares.yaml pool"):
+        resolve(scenario, ["HOST-A"], start, seed=1)
+
+
+def test_share_and_shares_category_together_raises():
+    scenario = {
+        "persona": "test_persona",
+        "org": "Vantage Corp",
+        "schedule": [
+            {
+                "action": "smb_access",
+                "params": {"share": "\\\\vantage-fileserver01\\finance", "shares_category": "hr"},
+            }
+        ],
+    }
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    with pytest.raises(ValueError, match="both 'share' and 'shares_category"):
+        resolve(scenario, ["HOST-A"], start, seed=1)

@@ -641,6 +641,17 @@ def test_mail_server_port_rejects_out_of_range(client):
     assert resp.status_code == 422
 
 
+def test_default_settings_have_no_smb_server_override(client):
+    resp = client.get("/settings")
+    assert resp.json()["smb_server_override"] is None
+
+
+def test_smb_server_override_settings_round_trip(client):
+    resp = client.put("/settings", json={"smb_server_override": "prod-fileserver.range.local"})
+    assert resp.status_code == 200
+    assert resp.json()["smb_server_override"] == "prod-fileserver.range.local"
+
+
 def test_default_settings_have_no_remote_install_credentials(client):
     resp = client.get("/settings")
     body = resp.json()
@@ -1058,6 +1069,58 @@ def test_mail_server_port_not_injected_when_only_host_is_missing(client, content
 
     assert "smtp_host" not in params
     assert "smtp_port" not in params
+
+
+# ---- SMB server override (Settings -> General) ------------------------
+
+SMB_SCENARIO_YAML = """
+persona: airport_director
+org: Metro Airport
+department: Executive
+schedule:
+  - action: smb_access
+    delay_before: 0-0s
+    params:
+      share: "\\\\\\\\fileserver01\\\\executive"
+      ops: [browse]
+"""
+
+
+@pytest.fixture
+def smb_scenario(tmp_path, monkeypatch):
+    (tmp_path / "airport_director.yaml").write_text(SMB_SCENARIO_YAML)
+    monkeypatch.setattr(app_module, "SCENARIOS_DIR", tmp_path)
+
+
+def _smb_params(ledger):
+    entry = next(e for e in ledger.values() if e["spec"]["action_type"] == "smb_access")
+    return entry["spec"]["params"]
+
+
+def test_smb_server_override_rewrites_share_host(client, smb_scenario):
+    client.put("/settings", json={"smb_server_override": "prod-fileserver.range.local"})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 1})
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    params = _smb_params(ledger)
+
+    assert params["share"] == "\\\\prod-fileserver.range.local\\executive"
+
+
+def test_smb_server_override_applies_even_to_seeded_replay(client, smb_scenario):
+    client.put("/settings", json={"smb_server_override": "prod-fileserver.range.local"})
+
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 42})
+    assert resp.status_code == 200
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+    assert _smb_params(ledger)["share"] == "\\\\prod-fileserver.range.local\\executive"
+
+
+def test_smb_server_not_rewritten_when_unconfigured(client, smb_scenario):
+    resp = client.post("/runs", json={"scenario_name": "airport_director", "hosts": ["H1"], "seed": 1})
+    ledger = client.get(f"/runs/{resp.json()['run_id']}/ledger").json()
+
+    assert _smb_params(ledger)["share"] == "\\\\fileserver01\\executive"
 
 
 @patch("app.content_gen.generate_content")

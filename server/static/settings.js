@@ -100,6 +100,8 @@ function applySettings(s) {
 
   document.getElementById("mail-server-host-input").value = s.mail_server_host || "";
   document.getElementById("mail-server-port-input").value = s.mail_server_port || "";
+
+  document.getElementById("smb-server-override-input").value = s.smb_server_override || "";
 }
 
 document.getElementById("connected-toggle").addEventListener("change", (e) => {
@@ -123,6 +125,7 @@ document.getElementById("settings-form").addEventListener("submit", async (e) =>
     local_base_url: document.getElementById("local-url-input").value,
     local_model: document.getElementById("local-model-input").value,
     mail_server_host: document.getElementById("mail-server-host-input").value,
+    smb_server_override: document.getElementById("smb-server-override-input").value,
   };
   // Port is an int-or-null field server-side -- an empty string isn't a
   // valid int, so (unlike the plain-string fields above) this has to be

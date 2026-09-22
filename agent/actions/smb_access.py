@@ -1,7 +1,12 @@
 """
-smb_access: browse a real SMB (or NFS, on Linux) share and copy a file,
-so the OS itself generates a real SMB session and the file server logs a
-real access record, rather than faking file activity.
+smb_access: browse a real SMB (or NFS, on Linux) share, copy a file down
+from it, and/or publish a local file up to it, so the OS itself
+generates a real SMB session and the file server logs a real access
+record, rather than faking file activity. Both directions use
+local_copy_dir: copy_file writes there, publish_file reads the named
+file from there -- symmetric, so a "pull from one directorate's share,
+push to another's" step just needs two smb_access actions with
+different `share`/`shares_category` and the same `file`.
 
 Windows: UNC paths (\\\\server\\share\\...) are directly usable via
 Python's os/shutil once reachable -- no drive-letter mapping needed for
@@ -20,11 +25,19 @@ verify on a real Linux puppet host before trusting it.
 Config (agent config.yaml, `smb:` block):
     username / password    optional; if set, authenticates the session
                             before accessing the share
-    local_copy_dir          where a copy_file op writes the copied file
-                            locally (default "./smb_downloads")
+    local_copy_dir          where copy_file writes the copied file
+                            locally, and where publish_file reads the
+                            local file it uploads from (default
+                            "./smb_downloads")
     mount_point             Linux only: scratch mountpoint directory
                             (default "/mnt/cybersim_smb")
     net_use_timeout_seconds Windows only, default 15
+
+params.file for publish_file must be a bare filename already present
+under local_copy_dir -- no path separators or "..", same traversal
+guard as copy_file's requested filename (there, safety comes from only
+ever matching against iterdir() results; here, since the destination
+path is built from the name directly, it's checked explicitly).
 """
 
 from __future__ import annotations
@@ -81,6 +94,34 @@ def _linux_unmount(mount_point: Path) -> None:
 
 def _browse(share_path: Path) -> list[str]:
     return [p.name for p in share_path.iterdir()]
+
+
+def _require_bare_filename(filename: str) -> str:
+    """publish_file builds its destination path directly from the given
+    name (share_path / filename), unlike copy_file's read side, which is
+    safe by construction (it only ever matches an already-listed
+    iterdir() entry). A name with a path separator or '..' would let
+    publish_file write outside the share -- reject it outright rather
+    than relying on iterdir() to catch it after the fact."""
+    if not filename or Path(filename).name != filename or filename in (".", ".."):
+        raise ValueError(f"filename must be a bare name with no path components: {filename!r}")
+    return filename
+
+
+def _publish_file(share_path: Path, source_dir: Path, filename: str) -> dict:
+    filename = _require_bare_filename(filename)
+    source = source_dir / filename
+    if not source.is_file():
+        raise RuntimeError(f"local file '{filename}' not found under {source_dir}")
+
+    dest = share_path / filename
+    shutil.copy2(source, dest)
+    return {
+        "published_file": filename,
+        "dest_path": str(dest),
+        "bytes_published": dest.stat().st_size,
+        "file_hash": _hash_file(dest),
+    }
 
 
 def _copy_file(share_path: Path, dest_dir: Path, filename: str | None) -> dict:
@@ -140,6 +181,18 @@ def _userspace_smb(params: dict, config: dict) -> dict:
                     shutil.copyfileobj(remote, local)
             result.update(source_file=filename, dest_path=str(destination),
                           bytes_copied=destination.stat().st_size, file_hash=_hash_file(destination))
+        if 'publish_file' in result['ops']:
+            if not params.get('file'):
+                raise ValueError('publish_file requires params.file naming the local file to upload')
+            filename = _require_bare_filename(params['file'])
+            source = Path(config.get('local_copy_dir', './smb_downloads')) / filename
+            if not source.is_file():
+                raise RuntimeError(f"local file '{filename}' not found under {source.parent}")
+            with source.open('rb') as local:
+                with smbclient.open_file(ntpath.join(share, filename), mode='wb') as remote:
+                    shutil.copyfileobj(local, remote)
+            result.update(published_file=filename, dest_path=ntpath.join(share, filename),
+                          bytes_published=source.stat().st_size, file_hash=_hash_file(source))
         return result
     finally:
         smbclient.delete_session(server)
@@ -183,6 +236,11 @@ def execute(params: dict, config: dict | None = None) -> dict:
 
         if "copy_file" in ops:
             side_effects.update(_copy_file(share_path, local_copy_dir, requested_file))
+
+        if "publish_file" in ops:
+            if not requested_file:
+                raise ValueError("publish_file requires params.file naming the local file to upload")
+            side_effects.update(_publish_file(share_path, local_copy_dir, requested_file))
 
         return side_effects
     finally:

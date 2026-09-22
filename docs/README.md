@@ -336,7 +336,51 @@ happens live, at the moment each agent actually connects. A literal IP
 baked into scenario content would need the scenario file itself edited
 when that host changes; there's no separate "check for IP updates"
 mechanism beyond the fact that every launched run already re-resolves
-scenario content from whatever's on disk right now.
+scenario content from whatever's on disk right now. For pointing every
+org's SMB traffic at one real file server without touching 100+
+scenario files individually, see "SMB file server" below instead.
+
+### SMB file server
+
+Every `smb_access` step resolves to a department's share one of two
+ways: a scenario file's own hand-written `params.share` (a UNC path
+like `\\vantage-fileserver01\finance`), or `params.shares_category:
+<department>` (or `shares_category: random` to land on any department
+in that persona's own org) against the shared per-org pool in
+`server/smb_shares.yaml` -- the same per-department paths already
+hand-written across `server/scenarios/*.yaml`, pulled into one file
+rather than duplicated. `shares_category` is the `smb_access` analogue
+of `web_browse`'s `targets_category` (see "Ranges" in
+DEVELOPER_NOTES.md), except org-scoped: a Finance persona at Vantage
+Corp and one at Metro Regional Hospital always land on their own org's
+finance share, never each other's.
+
+Either way, Settings -> General's "SMB file server" field overrides
+just the *host* portion of whatever share a step resolved to -- e.g.
+`vantage-fileserver01` becomes your configured host, `\finance` stays
+`\finance` -- so a live deployment can send every org's SMB traffic to
+one real file server without editing scenario content at all. Same
+mechanism and same determinism story as the mail server override above
+(`server/app.py`'s `_apply_smb_server_override`): applies at run-launch
+time, takes effect on the next launched run with no agent-side change,
+and isn't gated on seed/connected-mode since which physical server
+receives the traffic was never part of `resolve()`'s byte-identical-
+given-the-same-seed guarantee. Leave it blank and each resolved share's
+hostname is used exactly as scenario content (or `smb_shares.yaml`)
+says.
+
+`smb_access` can also publish a file *to* a share, not just copy one
+down: `ops: [publish_file]` with `params.file` naming a file already
+under the agent's local `smb.local_copy_dir` (default
+`./smb_downloads` -- the same directory `copy_file` writes into, so a
+"pull from one directorate's share, push to another's" narrative is
+just two `smb_access` steps sharing a `file` value and differing in
+`share`/`shares_category`). `params.file` must be a bare filename with
+no path separators or `..` -- `publish_file` builds its destination
+path directly from the name (unlike `copy_file`'s read side, which is
+safe by construction since it only ever matches an already-listed
+directory entry), so that's checked explicitly rather than relying on
+the OS to catch it.
 
 The installer requires admin (creates a Scheduled Task, not a Windows
 service -- a puppet host is meant to look like a real logged-in user
