@@ -71,6 +71,12 @@
               </label>
 
               <div id="anthropic-fields" class="provider-fields">
+                <p class="hint" style="margin-top:0">
+                  Needs an API key from <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>
+                  (the Console, not claude.ai) with billing enabled — a claude.ai
+                  Pro/Max subscription is a separate product and won't work here.
+                  See "Getting an API key" in README.md for the full walkthrough.
+                </p>
                 <label>
                   Anthropic API key <span id="anthropic-key-status" class="hint"></span>
                   <input id="anthropic-key-input" type="password" placeholder="sk-ant-...">
@@ -82,6 +88,12 @@
               </div>
 
               <div id="openai-fields" class="provider-fields">
+                <p class="hint" style="margin-top:0">
+                  Needs an API key from <a href="https://platform.openai.com" target="_blank" rel="noopener">platform.openai.com</a>
+                  (the developer Platform, not chatgpt.com) with billing enabled — a
+                  ChatGPT Plus subscription is a separate product and won't work here.
+                  See "Getting an API key" in README.md for the full walkthrough.
+                </p>
                 <label>
                   OpenAI API key <span id="openai-key-status" class="hint"></span>
                   <input id="openai-key-input" type="password" placeholder="sk-...">

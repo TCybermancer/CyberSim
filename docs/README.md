@@ -282,6 +282,59 @@ Scenarios can carry two kinds of extra metadata beyond `persona`:
   into `POST /runs` (and the recurring-schedule scheduler loop, which
   shares the same `_launch_run` core).
 
+#### Getting an API key (Anthropic or OpenAI)
+
+The single most common mistake here: **a ChatGPT Plus or Claude.ai Pro/Max
+subscription does not give you an API key.** Those are consumer chat
+products with their own separate billing; the API is a different product
+with its own separate billing, even though it's the same company/account
+login. You need an API key specifically, not a chat subscription.
+
+**Anthropic:**
+1. Go to [console.anthropic.com](https://console.anthropic.com) (the
+   *Console*, not [claude.ai](https://claude.ai) -- same login, different
+   product).
+2. Add a payment method under **Settings -> Billing**. API usage is
+   metered pay-as-you-go, billed separately from any claude.ai
+   subscription.
+3. **Settings -> API Keys -> Create Key**. Copy it now -- like most
+   providers, Anthropic only shows the full value once (starts with
+   `sk-ant-...`).
+4. Paste it into CyberSim's Settings -> General, under "Anthropic API
+   key". Leave the model field blank to use this server's default
+   (`server/content_gen.py`'s `DEFAULT_MODELS["anthropic"]`), or set a
+   specific model name if you want a different one.
+
+**OpenAI:**
+1. Go to [platform.openai.com](https://platform.openai.com) (the
+   *Platform*/developer dashboard, not [chatgpt.com](https://chatgpt.com)
+   -- again, same login, different product).
+2. Add a payment method under **Settings -> Billing**. Same story: API
+   usage is metered separately from any ChatGPT Plus subscription.
+3. **Dashboard -> API keys -> Create new secret key**. Copy it now (starts
+   with `sk-...` or `sk-proj-...` for a project-scoped key) -- OpenAI
+   also only shows it once.
+4. Paste it into CyberSim's Settings -> General, under "OpenAI API key".
+   Leave the model field blank for this server's default
+   (`DEFAULT_MODELS["openai"]`), or set a specific one.
+
+Either way, the key only needs to reach one endpoint
+(`api.anthropic.com` or `api.openai.com`) for a short, low-token request
+per `email_send` step with a `content_brief` -- no elevated scopes, no
+org-admin permissions, just standard API access on that key.
+
+**Skipping the dashboard entirely:** set `CYBERSIM_ANTHROPIC_API_KEY` or
+`CYBERSIM_OPENAI_API_KEY` in the server's own environment before
+starting it (same precedence as `CYBERSIM_ADMIN_PASSWORD` -- see
+`content_gen.py`'s `_resolve_key`). The env var always wins over
+whatever's stored in Settings, so this is the way to keep a live key out
+of the database entirely on a deployment you don't want it persisted on.
+
+Running a **local** OpenAI-compatible endpoint (Ollama, vLLM, LM Studio,
+...) instead needs no API key from either provider at all -- set
+`llm_provider: local` and `local_base_url` in Settings, and generated
+content never leaves your own network even in "connected" mode.
+
 ### Mail server
 
 Every simulated user's `email_send` actions, across every org, send
