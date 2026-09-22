@@ -271,20 +271,23 @@ for quick single-run testing.
   position in the schedule happens to land on -- otherwise 20 `repeat`d
   web_browse steps listed first would cluster in the morning instead of
   spreading through the whole day alongside the singular narrative
-  steps. Convention used across the demonstrated scenarios
-  (`software_engineer.yaml`, `accounting_manager.yaml`,
-  `soc_analyst.yaml` -- ~35-60 actions/day, spanning nearly the full
-  8-hour window): only "ambient" steps (`web_browse`, and a second,
-  `content_brief`-free `email_send` step using the local `generic`
-  template so high repeat counts don't multiply live-content-generation
-  LLM calls) get a high `repeat`; the narrative `email_send` (with
-  `content_brief`), `office_doc`, and both `smb_access` steps -- the
-  `should_alert` one especially -- stay unrepeated. A repeated "true
-  positive" would drown its own signal, which is exactly what moving to
-  `resolve_window()`'s injection model was meant to get away from (see
-  "Ranges" above). Not yet rolled out past those three scenarios --
-  deliberately left for a follow-up pass once the demonstrated shape
-  looked right.
+  steps. Convention used everywhere `repeat` appears: only "ambient"
+  steps (`web_browse`, and a second, `content_brief`-free `email_send`
+  step using the local `generic` template so high repeat counts don't
+  multiply live-content-generation LLM calls) get a high `repeat`; the
+  narrative `email_send` (with `content_brief`), `office_doc`, and every
+  `smb_access` step -- any `should_alert` step especially -- stay
+  unrepeated. A repeated "true positive" would drown its own signal,
+  which is exactly what moving to `resolve_window()`'s injection model
+  was meant to get away from (see "Ranges" above). Rolled out across
+  all 111 scenario files (`software_engineer.yaml`,
+  `accounting_manager.yaml`, and `soc_analyst.yaml` by hand first to
+  validate the shape; the rest via a script applying the same per-
+  web_browse-step repeat/duration profile and inserting one routine
+  `email_send`, both skipping any step already marked `should_alert`):
+  resolved days now run 44-57 actions (mean/median 50) across the
+  fleet, comfortably in "heavy" 8-hour-duty-day territory, spanning
+  nearly the entire business-hours window every time.
 - **Two ways a day gets an injection**, both landing in the same
   `range_injections` table so downstream handling doesn't care which:
   - `injection_mode: "manual"` -- a red-team operator picks an exact

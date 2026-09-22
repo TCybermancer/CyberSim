@@ -6,6 +6,7 @@ persona: finance_analyst
 
 schedule:
   - action: web_browse
+    repeat: 8-15
     delay_before: 1-5m
     targets:
       - http://intranet.corp.local
@@ -17,6 +18,7 @@ schedule:
       - tls_session
 
   - action: web_browse
+    repeat: 10-20
     delay_before: 5-10m
     targets_category: finance_reference
     duration: 5-15m
@@ -25,12 +27,23 @@ schedule:
       - dns_query
 
   - action: web_browse
+    repeat: 5-10
     delay_before: 15-30m
     targets_category: ecommerce
     duration: 5-10m
     expected_artifacts:
       - browser_history_entry
       - dns_query
+
+  - action: email_send
+    repeat: 8-15
+    delay_before: 5-10m
+    params:
+      to: hr-puppet@corp.local
+      template: generic
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
 
   - action: email_send
     delay_before: 2-10m

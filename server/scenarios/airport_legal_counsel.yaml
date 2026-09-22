@@ -10,18 +10,20 @@ department: Executive
 
 schedule:
   - action: web_browse
+    repeat: 8-15
     delay_before: 1-5m
     targets:
       - http://legal-research.corp.local
       - http://faa-compliance.corp.local
       - http://intranet.corp.local
-    duration: 10-20m
+    duration: 5-15m
     expected_artifacts:
       - browser_history_entry
       - dns_query
       - tls_session
 
   - action: web_browse
+    repeat: 10-20
     delay_before: 5-10m
     targets_category: finance_reference
     duration: 5-15m
@@ -30,12 +32,23 @@ schedule:
       - dns_query
 
   - action: web_browse
+    repeat: 5-10
     delay_before: 15-30m
     targets_category: news
     duration: 5-10m
     expected_artifacts:
       - browser_history_entry
       - dns_query
+
+  - action: email_send
+    repeat: 8-15
+    delay_before: 5-10m
+    params:
+      to: vendor-counsel-puppet@corp.local
+      template: generic
+    expected_artifacts:
+      - smtp_send_log
+      - mail_server_delivery_record
 
   - action: email_send
     delay_before: 5-15m
