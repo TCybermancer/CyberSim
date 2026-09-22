@@ -5,6 +5,7 @@
 persona: Systems Administrator
 org: Meridian Logistics
 department: IT
+after_hours_eligible: true
 
 schedule:
   - action: web_browse

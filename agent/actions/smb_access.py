@@ -30,6 +30,7 @@ Config (agent config.yaml, `smb:` block):
 from __future__ import annotations
 
 import hashlib
+import ntpath
 import platform
 import shutil
 import subprocess
@@ -104,8 +105,50 @@ def _copy_file(share_path: Path, dest_dir: Path, filename: str | None) -> dict:
     }
 
 
+def _userspace_smb(params: dict, config: dict) -> dict:
+    """Real SMB2/3 without mount privileges; explicitly selected on Linux."""
+    import smbclient
+
+    share = params['share'].replace('/', '\\')
+    parts = [part for part in share.split('\\') if part]
+    if not share.startswith('\\\\') or len(parts) < 2 or any(part in ('.', '..') for part in parts):
+        raise ValueError('SMB share must be a UNC server/share path without traversal')
+    server = parts[0]
+    share = '\\\\' + '\\'.join(parts)
+    if not config.get('username'):
+        raise ValueError('Userspace SMB requires explicit persona credentials')
+    smbclient.register_session(server, username=config['username'],
+                               password=config.get('password', ''),
+                               connection_timeout=config.get('timeout_seconds', 15))
+    try:
+        result = {'share': params['share'], 'ops': params.get('ops', []), 'backend': 'smbprotocol'}
+        if 'browse' in result['ops']:
+            result['listing'] = smbclient.listdir(share)
+        duration = params.get('duration_seconds', 0)
+        if duration:
+            time.sleep(duration)
+        if 'copy_file' in result['ops']:
+            files = [entry.name for entry in smbclient.scandir(share) if entry.is_file()]
+            filename = params.get('file') or (files[0] if files else None)
+            if filename not in files or ntpath.basename(filename) != filename or filename in ('.', '..'):
+                raise ValueError('Requested file must exist directly in the share')
+            destination = Path(config.get('local_copy_dir', './smb_downloads'))
+            destination.mkdir(parents=True, exist_ok=True)
+            destination = destination / filename
+            with smbclient.open_file(ntpath.join(share, filename), mode='rb') as remote:
+                with destination.open('wb') as local:
+                    shutil.copyfileobj(remote, local)
+            result.update(source_file=filename, dest_path=str(destination),
+                          bytes_copied=destination.stat().st_size, file_hash=_hash_file(destination))
+        return result
+    finally:
+        smbclient.delete_session(server)
+
+
 def execute(params: dict, config: dict | None = None) -> dict:
     smb_cfg = (config or {}).get("smb", {})
+    if platform.system() != 'Windows' and smb_cfg.get('backend') == 'smbprotocol':
+        return _userspace_smb(params, smb_cfg)
     username = smb_cfg.get("username")
     password = smb_cfg.get("password")
     local_copy_dir = Path(smb_cfg.get("local_copy_dir", "./smb_downloads"))

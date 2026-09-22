@@ -458,6 +458,42 @@ gone (`install-linux.sh --uninstall`; the Windows uninstaller plus a
 manual cleanup of the one file -- `config.yaml` -- Inno Setup
 deliberately doesn't track for removal).
 
+### Checking for updates
+
+`GET /updates/check` (admin only, called by Settings -> General's "Check
+for updates" button) compares this server's own version
+(`server/version.py`) and every registered agent's last-reported
+`agent_version` against the latest tagged GitHub release
+(`server/update_check.py`, a plain `requests.get` against
+`api.github.com` -- see its module docstring). Deliberately **on-demand
+only, never a background poller**: this orchestrator is routinely
+deployed on an OOB network for an airgapped range, and an unprompted
+outbound call to GitHub on a timer is exactly the kind of unexplained
+network noise this project otherwise goes out of its way to avoid
+generating on the range it's supposed to be observing. Clicking the
+button is a deliberate, attributable admin action instead -- and either
+way this only ever *reports* that an update exists, it never applies
+one.
+
+This doesn't replace tearing down and redeploying the server -- it's
+what tells you whether you need to. For a systemd install
+(`server/install.sh`), applying a server update is `sudo ./update.sh`:
+an in-place `git pull` + copy-changed-files + restart, reusing the
+existing venv (only reinstalling dependencies if `requirements.txt`
+actually changed) instead of `install.sh`'s from-scratch venv-and-
+service setup. For the Docker Compose deployment, the equivalent is
+`docker compose pull && docker compose up -d` against the
+`ghcr.io/tcybermancer/cybersim-server` image the release workflow
+publishes (see "CI / Releases" below). Either way that's a brief
+restart, not the old manual stop-wipe-reinstall-restart cycle.
+
+For agents: there's no push-update mechanism (yet) -- an outdated agent
+still needs reinstalling (or an `Install agent -> Remote Install` re-run
+against it) to pick up a new build. `GET /agents` and the dashboard's
+Registered agents table show each agent's last-reported `agent_version`
+(sent at every register call, i.e. every agent startup) so you know
+which hosts are behind without checking each one by hand.
+
 ### CI / Releases
 
 `.github/workflows/test.yml` runs the suite above on every push/PR to

@@ -34,7 +34,8 @@ Config (agent config.yaml, `browser:` block):
                   to actually see the window.
     channel       Playwright browser channel, e.g. "chrome" to drive a
                   real installed Chrome instead of bundled Chromium;
-                  omit to use bundled Chromium.
+                  omit to auto-detect Chrome or Edge on Windows, then
+                  fall back to bundled Chromium.
 
 Returns observed_side_effects (final URL, HTTP status, page title, and
 the profile directory used) that are independently verifiable by
@@ -70,6 +71,31 @@ _ensure_playwright_browsers_path()
 from playwright.sync_api import sync_playwright  # noqa: E402 -- must follow the env var fix above
 
 
+def _installed_windows_browser_channel() -> str | None:
+    """Return a Playwright channel for an installed system browser.
+
+    Windows agents should work immediately after installation without a
+    separate multi-hundred-megabyte ``playwright install chromium`` step.
+    Explicit ``browser.channel`` configuration still takes precedence.
+    """
+    if os.name != "nt":
+        return None
+
+    program_files = [
+        os.environ.get("PROGRAMFILES"),
+        os.environ.get("PROGRAMFILES(X86)"),
+    ]
+    candidates = (
+        ("chrome", Path("Google/Chrome/Application/chrome.exe")),
+        ("msedge", Path("Microsoft/Edge/Application/msedge.exe")),
+    )
+    for channel, relative_path in candidates:
+        for base in program_files:
+            if base and (Path(base) / relative_path).is_file():
+                return channel
+    return None
+
+
 def _browse(page, deadline: float) -> None:
     """Best-effort scroll/click traversal until deadline. A dead link,
     an off-page navigation, or a click timeout shouldn't fail the whole
@@ -98,8 +124,9 @@ def execute(params: dict, config: dict | None = None) -> dict:
     duration = params.get("duration_seconds", 0)
 
     launch_kwargs = {"headless": browser_cfg.get("headless", False)}
-    if browser_cfg.get("channel"):
-        launch_kwargs["channel"] = browser_cfg["channel"]
+    channel = browser_cfg.get("channel") or _installed_windows_browser_channel()
+    if channel:
+        launch_kwargs["channel"] = channel
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(str(profile_dir), **launch_kwargs)

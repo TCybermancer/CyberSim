@@ -15,6 +15,7 @@ import app as app_module
 import content_gen
 import db
 import remote_install
+import update_check
 from conftest import TEST_ADMIN_PASSWORD
 
 
@@ -199,6 +200,29 @@ def test_register_then_poll_preserves_os_and_persona(client):
     agents = {a["host"]: a for a in client.get("/agents").json()["agents"]}
     assert agents["H1"]["os"] == "windows"
     assert agents["H1"]["persona"] == "finance_analyst"
+
+
+def test_register_persists_agent_version(client):
+    client.post(
+        "/agents/register",
+        json={"host": "H1", "os": "linux", "agent_version": "0.2.0"},
+        headers=agent_auth("H1"),
+    )
+
+    agents = {a["host"]: a for a in client.get("/agents").json()["agents"]}
+    assert agents["H1"]["agent_version"] == "0.2.0"
+
+
+def test_register_without_agent_version_falls_back_to_the_model_default(client):
+    """AgentRegistration.agent_version defaults to the current release's
+    version -- an agent binary built at that release always sends it,
+    but a bare-bones request that omits the field entirely still gets
+    something sane rather than a hard 422."""
+    resp = client.post("/agents/register", json={"host": "H1", "os": "linux"}, headers=agent_auth("H1"))
+    assert resp.status_code == 200
+
+    agents = {a["host"]: a for a in client.get("/agents").json()["agents"]}
+    assert agents["H1"]["agent_version"]
 
 
 def test_install_bundle_rejects_unsafe_host_id(client):
@@ -651,6 +675,108 @@ def test_remote_install_settings_update_never_echoes_secrets(client):
     assert body["remote_linux_ssh_password_set"] is True
     assert body["remote_windows_winrm_user"] == "svc_provisioning"
     assert body["remote_windows_winrm_password_set"] is True
+
+
+# ---- version / update check --------------------------------------------
+
+
+def test_version_is_public(anon_client):
+    """No session needed -- same reachability as /health (see
+    _PUBLIC_PATHS), since the version isn't sensitive."""
+    resp = anon_client.get("/version")
+    assert resp.status_code == 200
+    assert resp.json() == {"server_version": app_module.SERVER_VERSION}
+
+
+def test_updates_check_requires_login(anon_client):
+    resp = anon_client.get("/updates/check")
+    assert resp.status_code == 401
+
+
+def test_updates_check_requires_admin(viewer_client):
+    resp = viewer_client.get("/updates/check")
+    assert resp.status_code == 403
+
+
+@patch("app.update_check.fetch_latest_release")
+def test_updates_check_reports_no_update_when_current(mock_fetch, client):
+    mock_fetch.return_value = {
+        "tag": f"v{app_module.SERVER_VERSION}",
+        "url": "https://github.com/TCybermancer/CyberSim/releases/tag/v0.2.0",
+        "published_at": "2026-01-01T00:00:00Z",
+    }
+
+    resp = client.get("/updates/check")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["server"]["current_version"] == app_module.SERVER_VERSION
+    assert body["server"]["update_available"] is False
+    assert body["agents"]["outdated"] == []
+
+
+@patch("app.update_check.fetch_latest_release")
+def test_updates_check_reports_server_update_available(mock_fetch, client):
+    mock_fetch.return_value = {
+        "tag": "v99.0.0",
+        "url": "https://github.com/TCybermancer/CyberSim/releases/tag/v99.0.0",
+        "published_at": "2026-01-01T00:00:00Z",
+    }
+
+    resp = client.get("/updates/check")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["latest_version"] == "99.0.0"
+    assert body["server"]["update_available"] is True
+
+
+@patch("app.update_check.fetch_latest_release")
+def test_updates_check_flags_outdated_agents(mock_fetch, client):
+    client.post(
+        "/agents/register",
+        json={"host": "OLD-HOST", "os": "linux", "agent_version": "0.1.0"},
+        headers=agent_auth("OLD-HOST"),
+    )
+    client.post(
+        "/agents/register",
+        json={"host": "NEW-HOST", "os": "linux", "agent_version": "99.0.0"},
+        headers=agent_auth("NEW-HOST"),
+    )
+    mock_fetch.return_value = {
+        "tag": "v99.0.0",
+        "url": "https://github.com/TCybermancer/CyberSim/releases/tag/v99.0.0",
+        "published_at": "2026-01-01T00:00:00Z",
+    }
+
+    resp = client.get("/updates/check")
+
+    outdated = {a["host"]: a["agent_version"] for a in resp.json()["agents"]["outdated"]}
+    assert outdated == {"OLD-HOST": "0.1.0"}
+
+
+@patch("app.update_check.fetch_latest_release")
+def test_updates_check_ignores_agents_with_no_reported_version(mock_fetch, client):
+    """A host that's only ever polled (touch_agent's fallback insert, no
+    full register) has agent_version=NULL -- must not crash the version
+    comparison or get reported as outdated with a nonsense value."""
+    db.touch_agent("NEVER-REGISTERED", datetime.utcnow().isoformat())
+    mock_fetch.return_value = {
+        "tag": "v99.0.0",
+        "url": "https://github.com/TCybermancer/CyberSim/releases/tag/v99.0.0",
+        "published_at": "2026-01-01T00:00:00Z",
+    }
+
+    resp = client.get("/updates/check")
+
+    assert resp.status_code == 200
+    assert resp.json()["agents"]["outdated"] == []
+
+
+def test_updates_check_surfaces_github_unreachable_as_502(client):
+    with patch("app.update_check.fetch_latest_release", side_effect=update_check.UpdateCheckError("couldn't reach GitHub: timeout")):
+        resp = client.get("/updates/check")
+    assert resp.status_code == 502
 
 
 # ---- remote install ---------------------------------------------------

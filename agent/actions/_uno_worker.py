@@ -20,12 +20,17 @@ Usage: python.exe _uno_worker.py '<json args>'
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import sys
 import time
+import signal
+import subprocess
+import tempfile
+import uuid
+import shutil
 from pathlib import Path
 
-import officehelper
 import uno
 from com.sun.star.beans import PropertyValue
 
@@ -62,6 +67,86 @@ def _edit(document, app: str) -> None:
         text.insertString(text.getEnd(), f"\n{stamp}\n", False)
 
 
+def _owned_bootstrap(soffice_path: str, profile: str):
+    pipe = 'cybersim_' + uuid.uuid4().hex
+    popen_kwargs = {
+        'cwd': str(Path.home()),
+        'stdout': subprocess.DEVNULL,
+        'stderr': subprocess.DEVNULL,
+    }
+    if sys.platform.startswith('win'):
+        popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs['start_new_session'] = True
+    process = subprocess.Popen([
+        soffice_path, '-env:UserInstallation=' + Path(profile).as_uri(),
+        '--headless', '--nologo', '--nodefault', '--norestore',
+        '--accept=pipe,name=' + pipe + ';urp;StarOffice.ServiceManager',
+    ], **popen_kwargs)
+    try:
+        local = uno.getComponentContext()
+        resolver = local.ServiceManager.createInstanceWithContext(
+            'com.sun.star.bridge.UnoUrlResolver', local)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError('LibreOffice exited before UNO connection: ' + str(process.returncode))
+            try:
+                return resolver.resolve('uno:pipe,name=' + pipe + ';urp;StarOffice.ComponentContext'), process
+            except uno.getClass('com.sun.star.connection.NoConnectException'):
+                time.sleep(0.5)
+        raise TimeoutError('LibreOffice UNO startup exceeded 60 seconds')
+    except BaseException:
+        _stop_owned_office(process)
+        raise
+
+
+def _stop_owned_office(process):
+    if process.poll() is None:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            if sys.platform.startswith('win'):
+                subprocess.run(
+                    ['taskkill.exe', '/PID', str(process.pid), '/T', '/F'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+def _cleanup_profile(profile) -> None:
+    """Remove the isolated LibreOffice profile without failing the action.
+
+    On Windows, soffice.exe can exit just before its soffice.bin child releases
+    extension registry files.  TemporaryDirectory.cleanup() then raises a
+    sharing-violation even though the document operation and office shutdown
+    both succeeded.  Retry that short release window and leave only the
+    disposable profile behind if Windows still has it locked; a cleanup race
+    must not turn a completed user action into a false failure.
+    """
+    if profile is None:
+        return
+    for attempt in range(20):
+        try:
+            profile.cleanup()
+            return
+        except OSError:
+            if attempt < 19:
+                time.sleep(0.5)
+    shutil.rmtree(profile.name, ignore_errors=True)
+
+
 def run(args: dict) -> dict:
     app = args.get("app", "libreoffice_calc")
     if app not in _APP_INFO:
@@ -75,14 +160,17 @@ def run(args: dict) -> dict:
     hash_before = _hash_file(file_path)
     existed_before = file_path.exists()
 
-    # officehelper.bootstrap() quotes ITS OWN auto-detected soffice path
-    # (to survive shell=True with spaces in "Program Files") but not a
-    # caller-supplied one -- quote it ourselves or "C:\Program" gets
-    # split as the command and "Files\...\soffice.exe" as an argument.
     soffice_arg = args.get("soffice_path")
-    ctx = officehelper.bootstrap(soffice=f'"{soffice_arg}"' if soffice_arg else None)
-    desktop = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
+    process = None
+    profile = tempfile.TemporaryDirectory(prefix='cybersim-office-')
     try:
+        ctx, process = _owned_bootstrap(soffice_arg or 'soffice', profile.name)
+    except BaseException:
+        _cleanup_profile(profile)
+        raise
+    desktop = None
+    try:
+        desktop = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
         if existed_before:
             url = uno.systemPathToFileUrl(str(file_path))
             document = desktop.loadComponentFromURL(url, "_blank", 0, (_prop("Hidden", True),))
@@ -109,7 +197,14 @@ def run(args: dict) -> dict:
         if "close" in ops:
             document.close(False)
     finally:
-        desktop.terminate()
+        try:
+            if desktop is not None:
+                desktop.terminate()
+        finally:
+            if process is not None:
+                _stop_owned_office(process)
+            if profile is not None:
+                _cleanup_profile(profile)
 
     return {
         "app": app,

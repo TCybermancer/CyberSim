@@ -1,0 +1,4 @@
+# Force LF everywhere regardless of OS/editor/OneDrive-sync settings --
+# this repo's history is LF and a synced working tree drifting to CRLF
+# turns every file into a full-file diff.
+* text=auto eol=lf

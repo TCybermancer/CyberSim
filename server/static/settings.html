@@ -18,6 +18,7 @@
     <h1>CyberSim</h1>
     <a href="./" class="sidebar-link">Dashboard</a>
     <a id="nav-scenario-builder" href="scenario-builder.html" class="sidebar-link" style="display:none">Build scenario</a>
+    <a id="nav-ranges" href="ranges.html" class="sidebar-link" style="display:none">Ranges</a>
     <a id="nav-install" href="install.html" class="sidebar-link" style="display:none">Install agent</a>
     <a id="nav-users" href="users.html" class="sidebar-link" style="display:none">Users</a>
     <a id="nav-settings" href="settings.html" class="sidebar-link active" style="display:none">Settings</a>
@@ -135,6 +136,19 @@
             <button type="submit">Save settings</button>
           </form>
           <div id="settings-result" class="result"></div>
+
+          <h2 style="font-size:0.85rem; margin-top:1.1rem">Updates</h2>
+          <p class="hint" style="margin-top:0">
+            Running version <strong id="current-version-display">—</strong>. Checking calls
+            GitHub directly from this server (<code>api.github.com</code>) — only when you click
+            the button below, never automatically, so this stays safe to use on an airgapped
+            range. Also flags any registered agent reporting an older version than the latest
+            release; either way, this only tells you an update exists, it doesn't apply one. For
+            the server itself on a systemd install, see <code>server/update.sh</code>; for
+            agents, reinstall or use <a href="install.html">Install agent → Remote Install</a>.
+          </p>
+          <button type="button" id="check-updates-btn">Check for updates</button>
+          <div id="updates-result" class="result"></div>
         </div>
       </div>
 
@@ -223,7 +237,7 @@
 </div>
 
 <script src="theme.js?v=1"></script>
-<script src="auth.js?v=3"></script>
-<script src="settings.js?v=6"></script>
+<script src="auth.js?v=4"></script>
+<script src="settings.js?v=7"></script>
 </body>
 </html>

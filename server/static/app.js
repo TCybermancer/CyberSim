@@ -192,9 +192,9 @@ async function loadAgents() {
       (a) =>
         `<tr><td>${a.host}</td><td>${a.os}</td><td>${a.persona || "—"}</td><td>${fmtTime(
           a.last_seen
-        )}</td></tr>`
+        )}</td><td>${a.agent_version || "—"}</td></tr>`
     )
-    .join("") || `<tr><td colspan="4" class="hint">no agents have registered yet</td></tr>`;
+    .join("") || `<tr><td colspan="5" class="hint">no agents have registered yet</td></tr>`;
 
   const chipRow = $("known-hosts");
   chipRow.innerHTML = agents

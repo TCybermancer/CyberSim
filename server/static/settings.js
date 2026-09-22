@@ -201,6 +201,36 @@ document.getElementById("remote-install-settings-form").addEventListener("submit
   }
 });
 
+// ---- updates (admin only, on-demand) -----------------------------------
+
+document.getElementById("check-updates-btn").addEventListener("click", async () => {
+  const result = document.getElementById("updates-result");
+  const btn = document.getElementById("check-updates-btn");
+  btn.disabled = true;
+  result.textContent = "checking...";
+  result.className = "result";
+  try {
+    const status = await api("/updates/check");
+    const lines = [];
+    lines.push(
+      status.server.update_available
+        ? `Update available: v${status.latest_version} (you're on ${status.server.current_version}) — <a href="${status.release_url}" target="_blank" rel="noopener">release notes</a>`
+        : `You're on the latest version (${status.server.current_version}).`
+    );
+    if (status.agents.outdated.length) {
+      const hosts = status.agents.outdated.map((a) => `${a.host} (${a.agent_version})`).join(", ");
+      lines.push(`${status.agents.outdated.length} agent(s) behind v${status.latest_version}: ${hosts}`);
+    }
+    result.innerHTML = lines.join("<br>");
+    result.className = "result success";
+  } catch (err) {
+    result.textContent = `couldn't check for updates: ${err.message}`;
+    result.className = "result error";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 (async function init() {
   const user = await setupWhoami();
   if (!user) return;
@@ -221,5 +251,11 @@ document.getElementById("remote-install-settings-form").addEventListener("submit
   } catch (err) {
     document.getElementById("settings-result").textContent = `couldn't load settings: ${err.message}`;
     document.getElementById("settings-result").className = "result error";
+  }
+  try {
+    const { server_version } = await api("/version");
+    document.getElementById("current-version-display").textContent = server_version;
+  } catch {
+    /* non-critical -- leave the em dash placeholder */
   }
 })();

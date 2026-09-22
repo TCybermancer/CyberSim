@@ -5,6 +5,7 @@
 persona: DevOps Engineer
 org: Vantage Corp
 department: Engineering
+after_hours_eligible: true
 
 schedule:
   - action: web_browse
