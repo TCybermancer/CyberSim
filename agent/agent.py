@@ -57,22 +57,18 @@ def bound_session(oob_source_ip: str | None) -> requests.Session:
     """
     session = requests.Session()
     if oob_source_ip:
-        adapter = requests.adapters.HTTPAdapter()
-        # Simplest reliable approach: monkeypatch the socket source via
-        # a custom transport adapter's init_poolmanager, or bind at the
-        # OS level with `ip route` policy routing (preferred in prod --
-        # see docs/README.md). Left explicit here rather than silently
-        # trusting the default route.
-        original_init = socket.socket.__init__
+        class OobAdapter(requests.adapters.HTTPAdapter):
+            def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+                pool_kwargs['source_address'] = (oob_source_ip, 0)
+                return super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
 
-        def patched_init(self, *args, **kwargs):
-            original_init(self, *args, **kwargs)
-            try:
-                self.bind((oob_source_ip, 0))
-            except OSError:
-                pass  # already bound, or not a TCP/UDP socket
+            def proxy_manager_for(self, proxy, **proxy_kwargs):
+                proxy_kwargs['source_address'] = (oob_source_ip, 0)
+                return super().proxy_manager_for(proxy, **proxy_kwargs)
 
-        socket.socket.__init__ = patched_init
+        # Scope binding to control-plane HTTP only. A global socket patch
+        # also forces SMTP/SMB actions onto OOB, defeating role-VLAN routing.
+        adapter = OobAdapter()
         session.mount("http://", adapter)
         session.mount("https://", adapter)
     return session
