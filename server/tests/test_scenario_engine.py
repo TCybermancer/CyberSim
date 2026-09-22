@@ -254,3 +254,68 @@ def test_resolve_window_multi_host_each_gets_the_full_schedule():
     assert {s.host for s in specs} == {"HOST-A", "HOST-B"}
     assert len([s for s in specs if s.host == "HOST-A"]) == 3
     assert len([s for s in specs if s.host == "HOST-B"]) == 3
+
+
+# --- targets_category (shared website_categories.yaml pools) -----------
+
+CATEGORY_SCENARIO = {
+    "persona": "test_persona",
+    "schedule": [
+        {
+            "action": "web_browse",
+            "delay_before": "0s",
+            "targets_category": "social_media",
+            "duration": "1s",
+        },
+    ],
+}
+
+
+def test_targets_category_resolves_to_a_pool_member():
+    from scenario_engine import _load_website_categories
+
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    _, _, specs = resolve(CATEGORY_SCENARIO, ["HOST-A"], start, seed=1)
+
+    assert specs[0].params["target"] in _load_website_categories()["social_media"]
+
+
+def test_targets_category_is_deterministic_for_a_given_seed():
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    _, _, specs1 = resolve(CATEGORY_SCENARIO, ["HOST-A"], start, seed=7)
+    _, _, specs2 = resolve(CATEGORY_SCENARIO, ["HOST-A"], start, seed=7)
+
+    assert specs1[0].params["target"] == specs2[0].params["target"]
+
+
+def test_targets_category_works_through_resolve_window_too():
+    scenario = {**CATEGORY_SCENARIO}
+    start = datetime(2026, 1, 1, 9, 0, 0)
+    end = datetime(2026, 1, 1, 17, 0, 0)
+    _, _, specs = resolve_window(scenario, ["HOST-A"], start, end, seed=1)
+
+    from scenario_engine import _load_website_categories
+
+    assert specs[0].params["target"] in _load_website_categories()["social_media"]
+
+
+def test_unknown_targets_category_raises():
+    scenario = {
+        "persona": "test_persona",
+        "schedule": [{"action": "web_browse", "targets_category": "not_a_real_category"}],
+    }
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    with pytest.raises(ValueError, match="unknown targets_category"):
+        resolve(scenario, ["HOST-A"], start, seed=1)
+
+
+def test_targets_and_targets_category_together_raises():
+    scenario = {
+        "persona": "test_persona",
+        "schedule": [
+            {"action": "web_browse", "targets": ["http://a"], "targets_category": "social_media"}
+        ],
+    }
+    start = datetime(2026, 1, 1, 12, 0, 0)
+    with pytest.raises(ValueError, match="both 'targets' and 'targets_category"):
+        resolve(scenario, ["HOST-A"], start, seed=1)

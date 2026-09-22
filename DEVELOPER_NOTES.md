@@ -213,6 +213,28 @@ for quick single-run testing.
   small built-in bank (`_DEFAULT_SUBSTITUTIONS`) or an override dict,
   substituted via regex so both a bare-placeholder value and one embedded
   in a larger string work.
+- **`targets_category`** (`server/website_categories.yaml`,
+  `scenario_engine._resolve_target()`): a `web_browse` step can name a
+  shared pool (`targets_category: social_media`) instead of hand-writing
+  a `targets:` list -- one entry is picked via the same seeded
+  `rng.choice()`, so determinism/replay still holds, and it composes for
+  free with Ranges' multi-day spread: each day's `resolve_window()` call
+  gets its own `_day_seed()`, so a multi-day range picks a different site
+  from the pool each day rather than repeating the same one. Two kinds
+  of pool: general-purpose/"off-task" browsing realism (`social_media`,
+  `ecommerce`, `news`) any persona can use, and role-flavored public-
+  internet reference reading (`finance_reference`,
+  `healthcare_reference`, `it_reference`, `aviation_ops_reference`,
+  `public_safety_reference`) for a persona's plausible job-related
+  browsing that isn't their org's own internal tooling. Deliberately
+  does **not** cover a persona's org-internal targets (ticketing system,
+  intranet, etc.) -- those stay hand-written per scenario file, since
+  they're tenant-specific (see e.g. each `it_help_desk_technician*.yaml`
+  variant's own per-org ticketing-system domain) and would be wrong to
+  share across simulated orgs. `targets` and `targets_category` on the
+  same step is a hard error (which one should win would be arbitrary),
+  as is an unrecognized category name -- both fail loud rather than
+  silently doing something unintended.
 - **Two ways a day gets an injection**, both landing in the same
   `range_injections` table so downstream handling doesn't care which:
   - `injection_mode: "manual"` -- a red-team operator picks an exact

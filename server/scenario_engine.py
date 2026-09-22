@@ -74,6 +74,41 @@ def load_scenario(path: str | Path) -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
+WEBSITE_CATEGORIES_PATH = Path(__file__).parent / "website_categories.yaml"
+
+
+def _load_website_categories() -> dict[str, list[str]]:
+    """Loaded fresh on every call (small file, and lets an admin edit
+    website_categories.yaml without a server restart -- same tradeoff as
+    app.py's _load_suspicious_behaviors())."""
+    with open(WEBSITE_CATEGORIES_PATH) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _resolve_target(step: dict, rng: random.Random) -> str | None:
+    """A step names its web_browse target either as an explicit
+    `targets:` list (unchanged, existing behavior) or a `targets_category:
+    <name>` naming a shared pool in website_categories.yaml -- either way,
+    one entry is picked via the same seeded rng.choice() so determinism/
+    replay still holds. Not both on the same step: that's almost
+    certainly an authoring mistake (which one wins would be arbitrary),
+    so it's a hard error rather than silently picking one."""
+    targets = step.get("targets")
+    category = step.get("targets_category")
+    if targets and category:
+        raise ValueError(
+            f"step has both 'targets' and 'targets_category: {category}' -- use only one"
+        )
+    if category:
+        pool = _load_website_categories().get(category)
+        if not pool:
+            raise ValueError(f"unknown targets_category '{category}' (see server/website_categories.yaml)")
+        return rng.choice(pool)
+    if targets:
+        return rng.choice(targets)
+    return None
+
+
 def _resolve_duration(spec: dict, rng: random.Random) -> timedelta:
     """Parse a 'duration: 5-15m' style range (or a bare fixed value like
     '0s', with no '-') and sample a value from it. Every scenario file
@@ -129,10 +164,10 @@ def resolve(
             gap = _resolve_duration({"duration": step.get("delay_before", "0s")}, rng)
             cursor += gap
 
-            targets = step.get("targets")
             params = dict(step.get("params", {}))
-            if targets:
-                params["target"] = rng.choice(targets)
+            target = _resolve_target(step, rng)
+            if target is not None:
+                params["target"] = target
 
             duration = _resolve_duration(step, rng)
 
@@ -280,10 +315,10 @@ def resolve_window(
         for step, intended_start, duration in _spread_steps(
             scenario.get("schedule", []), effective_start, effective_end, rng
         ):
-            targets = step.get("targets")
             params = dict(step.get("params", {}))
-            if targets:
-                params["target"] = rng.choice(targets)
+            target = _resolve_target(step, rng)
+            if target is not None:
+                params["target"] = target
 
             actions.append(
                 ActionSpec(
@@ -313,13 +348,13 @@ def resolve_window(
             for step in injected_behavior.get("steps", []):
                 cursor += _resolve_duration({"duration": step.get("delay_before", "0s")}, rng)
 
-                targets = step.get("targets")
                 params = {
                     k: (_substitute_placeholders(v, rng, merged_substitutions) if isinstance(v, str) else v)
                     for k, v in step.get("params", {}).items()
                 }
-                if targets:
-                    params["target"] = rng.choice(targets)
+                target = _resolve_target(step, rng)
+                if target is not None:
+                    params["target"] = target
 
                 duration = _resolve_duration(step, rng)
                 actions.append(

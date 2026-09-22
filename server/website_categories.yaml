@@ -1,0 +1,74 @@
+# Shared website-category pools for web_browse steps (see
+# scenario_engine.py's _resolve_target()). A schedule step can use
+# `targets_category: <name>` instead of hand-writing a `targets:` list --
+# resolve()/resolve_window() pick one entry from the named pool via the
+# same seeded rng.choice() used for an explicit `targets:` list, so
+# determinism/replay still holds.
+#
+# These are real, live public domains -- picking one generates genuine
+# DNS/HTTP traffic to an actual site, same as any other web_browse
+# target. Org-internal targets (a persona's own ticketing system,
+# intranet, etc.) stay hand-written per scenario file's `targets:` list
+# rather than living here -- each simulated org's internal hostnames are
+# tenant-specific (see e.g. it_help_desk_technician*.yaml's per-org
+# ticketing-system domains) and would be wrong to share across orgs.
+#
+# General-purpose (any persona, "off-task"/background browsing realism):
+social_media:
+  - https://www.facebook.com
+  - https://twitter.com
+  - https://www.instagram.com
+  - https://www.linkedin.com
+  - https://www.reddit.com
+  - https://www.pinterest.com
+
+ecommerce:
+  - https://www.amazon.com
+  - https://www.ebay.com
+  - https://www.etsy.com
+  - https://www.walmart.com
+  - https://www.target.com
+  - https://www.bestbuy.com
+
+news:
+  - https://www.cnn.com
+  - https://www.bbc.com
+  - https://www.reuters.com
+  - https://apnews.com
+  - https://www.npr.org
+
+# Role-flavored (a persona's plausible *public-internet* reference
+# reading for their job -- distinct from their org's own internal
+# tools, which stay in that persona's own targets: list):
+finance_reference:
+  - https://www.bloomberg.com
+  - https://www.marketwatch.com
+  - https://www.wsj.com
+  - https://www.cnbc.com
+  - https://www.investopedia.com
+
+healthcare_reference:
+  - https://www.webmd.com
+  - https://www.mayoclinic.org
+  - https://www.cdc.gov
+  - https://www.nih.gov
+  - https://www.medscape.com
+
+it_reference:
+  - https://stackoverflow.com
+  - https://github.com
+  - https://docs.microsoft.com
+  - https://developer.mozilla.org
+  - https://www.reddit.com
+
+aviation_ops_reference:
+  - https://www.faa.gov
+  - https://www.flightaware.com
+  - https://www.flightradar24.com
+  - https://www.transportation.gov
+
+public_safety_reference:
+  - https://www.fbi.gov
+  - https://www.dhs.gov
+  - https://www.ready.gov
+  - https://www.iaff.org
