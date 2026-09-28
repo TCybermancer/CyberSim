@@ -98,3 +98,77 @@ def test_publish_file_rejects_path_components(local_source, tmp_path, bad_name):
     dest_share.mkdir()
     with pytest.raises(ValueError, match="bare name"):
         _publish_file(dest_share, local_source, bad_name)
+
+
+# --- robustness fixes: subdirectory-tolerant enumeration + transient retry ---
+
+from pathlib import Path
+
+from actions import smb_access
+from actions.smb_access import _safe_is_file, execute
+
+
+def test_safe_is_file_swallows_oserror():
+    """is_file() on a subdir entry over SMB can raise WinError 59; the safe
+    wrapper must treat that as 'not a copyable file', never propagate."""
+    class Boom:
+        def is_file(self):
+            raise OSError("simulated WinError 59")
+    assert _safe_is_file(Boom()) is False
+
+
+def test_copy_file_survives_unstattable_subdir(share, tmp_path, monkeypatch):
+    """A share containing a subdir whose is_file() raises (the real-SMB
+    failure mode) must not abort the copy -- the root file is still found."""
+    real_is_file = Path.is_file
+
+    def flaky(self):
+        if self.name == "subdir":
+            raise OSError("simulated WinError 59")
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", flaky)
+    result = _copy_file(share, tmp_path / "dl", "notes.txt")
+    assert result["source_file"] == "notes.txt"
+
+
+def test_copy_file_no_filename_skips_unstattable_subdir(share, tmp_path, monkeypatch):
+    real_is_file = Path.is_file
+
+    def flaky(self):
+        if self.name == "subdir":
+            raise OSError("simulated WinError 59")
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", flaky)
+    result = _copy_file(share, tmp_path / "dl", None)
+    assert result["source_file"] in {"budget_q3.txt", "notes.txt"}
+
+
+def test_execute_retries_transient_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_once(params, config):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("An unexpected network error occurred")  # transient
+        return {"ok": True}
+
+    monkeypatch.setattr(smb_access, "_execute_once", fake_once)
+    monkeypatch.setattr(smb_access.time, "sleep", lambda *_: None)
+    assert execute({}, {}) == {"ok": True}
+    assert calls["n"] == 2
+
+
+def test_execute_does_not_retry_nontransient(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_once(params, config):
+        calls["n"] += 1
+        raise ValueError("bad params")
+
+    monkeypatch.setattr(smb_access, "_execute_once", fake_once)
+    monkeypatch.setattr(smb_access.time, "sleep", lambda *_: None)
+    with pytest.raises(ValueError):
+        execute({}, {})
+    assert calls["n"] == 1  # not retried

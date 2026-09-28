@@ -55,6 +55,38 @@ def _hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# Windows/CIFS "transient" network errors worth retrying rather than failing
+# the whole action on. 59 = ERROR_UNEXP_NET_ERR (the one seen most in the
+# ledger), 53/51/64/121 = net path/host/name/timeout classes.
+_TRANSIENT_WINERRORS = {51, 53, 59, 64, 121}
+_SMB_RETRIES = 2  # total attempts = _SMB_RETRIES + 1
+_SMB_RETRY_BACKOFF_SECONDS = 1.5
+
+
+def _is_transient_smb_error(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    winerror = getattr(exc, "winerror", None)
+    if winerror in _TRANSIENT_WINERRORS:
+        return True
+    # smbprotocol raises its own error types; match on the message as a
+    # last resort so a transient userspace-SMB blip is retried too.
+    return "unexpected network error" in str(exc).lower()
+
+
+def _safe_is_file(entry) -> bool:
+    """`entry.is_file()` but never raises. Over SMB, calling is_file() (a
+    stat) on a *subdirectory* entry can throw WinError 59 and abort the
+    whole share enumeration -- real shares have subfolders, so a plain
+    `[p for p in iterdir() if p.is_file()]` fails ~any share that isn't
+    flat. Treat an entry we can't stat as "not a regular file we can copy"
+    and skip it, rather than letting one bad entry kill the action."""
+    try:
+        return entry.is_file()
+    except OSError:
+        return False
+
+
 def _windows_net_use(share: str, username: str | None, password: str | None, timeout: int) -> bool:
     """Establishes an authenticated session via `net use` if credentials
     were given. Returns whether it did, so execute() knows whether to
@@ -77,6 +109,13 @@ def _windows_net_use_delete(share: str) -> None:
     subprocess.run(["net", "use", share, "/delete", "/y"], capture_output=True, text=True)
 
 
+# mount.cifs/umount against an unreachable or wedged server can block the
+# agent's (single-threaded) action loop indefinitely -- a hung mount here is a
+# prime cause of a host going silent, because the action never completes and
+# the server then treats the host as permanently "busy". Bound both.
+_MOUNT_TIMEOUT_SECONDS = 20
+
+
 def _linux_mount(share: str, mount_point: Path, username: str | None, password: str | None) -> None:
     mount_point.mkdir(parents=True, exist_ok=True)
     options = "guest" if not username else f"username={username},password={password or ''}"
@@ -85,11 +124,20 @@ def _linux_mount(share: str, mount_point: Path, username: str | None, password: 
         capture_output=True,
         text=True,
         check=True,
+        timeout=_MOUNT_TIMEOUT_SECONDS,
     )
 
 
 def _linux_unmount(mount_point: Path) -> None:
-    subprocess.run(["umount", str(mount_point)], capture_output=True, text=True)
+    try:
+        subprocess.run(
+            ["umount", str(mount_point)], capture_output=True, text=True,
+            timeout=_MOUNT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # A stuck mount can wedge a clean umount; a lazy detach frees the
+        # mountpoint so the next run isn't blocked by the leftover.
+        subprocess.run(["umount", "-l", str(mount_point)], capture_output=True, text=True)
 
 
 def _browse(share_path: Path) -> list[str]:
@@ -125,7 +173,7 @@ def _publish_file(share_path: Path, source_dir: Path, filename: str) -> dict:
 
 
 def _copy_file(share_path: Path, dest_dir: Path, filename: str | None) -> dict:
-    files = [p for p in share_path.iterdir() if p.is_file()]
+    files = [p for p in share_path.iterdir() if _safe_is_file(p)]
     if filename:
         source = next((p for p in files if p.name == filename), None)
         if source is None:
@@ -169,7 +217,7 @@ def _userspace_smb(params: dict, config: dict) -> dict:
         if duration:
             time.sleep(duration)
         if 'copy_file' in result['ops']:
-            files = [entry.name for entry in smbclient.scandir(share) if entry.is_file()]
+            files = [entry.name for entry in smbclient.scandir(share) if _safe_is_file(entry)]
             filename = params.get('file') or (files[0] if files else None)
             if filename not in files or ntpath.basename(filename) != filename or filename in ('.', '..'):
                 raise ValueError('Requested file must exist directly in the share')
@@ -199,6 +247,27 @@ def _userspace_smb(params: dict, config: dict) -> dict:
 
 
 def execute(params: dict, config: dict | None = None) -> dict:
+    """Run one smb_access action, retrying on transient network errors.
+
+    A single flaky SMB round-trip (WinError 59 and friends) previously
+    failed the whole action; real fileservers produce these intermittently,
+    so retry a couple of times with backoff before giving up. Non-transient
+    errors (auth, genuinely-missing file, bad params) still fail fast."""
+    last_exc: BaseException | None = None
+    for attempt in range(_SMB_RETRIES + 1):
+        try:
+            return _execute_once(params, config)
+        except Exception as exc:  # noqa: BLE001 -- decide retry vs re-raise below
+            last_exc = exc
+            if attempt < _SMB_RETRIES and _is_transient_smb_error(exc):
+                time.sleep(_SMB_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            raise
+    assert last_exc is not None  # unreachable; loop either returns or raises
+    raise last_exc
+
+
+def _execute_once(params: dict, config: dict | None = None) -> dict:
     smb_cfg = (config or {}).get("smb", {})
     if platform.system() != 'Windows' and smb_cfg.get('backend') == 'smbprotocol':
         return _userspace_smb(params, smb_cfg)
