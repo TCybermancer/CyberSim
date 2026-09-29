@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import socket
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,37 @@ from actions import run_action
 from models import AgentRegistration, CompletionRecord, IntentRecord
 
 CLOCK_DRIFT_WARN_SECONDS = 5.0
+
+# Hard ceiling on how long a single action may run before the agent gives up
+# on it and moves on. Actions run inline in the poll loop, so without this a
+# hung action (e.g. an SMB mount against a wedged server) stalls the whole
+# host AND -- because no completion record is ever reported -- makes the
+# server treat the host as permanently "busy" and stop scheduling it. Timing
+# out guarantees a completion is always posted, so neither happens.
+DEFAULT_MAX_ACTION_SECONDS = 300
+
+
+def _run_action_bounded(action_type, params, cfg, timeout):
+    """Run one action with a wall-clock timeout. On timeout we cannot force
+    the worker thread to die (Python has no safe thread kill), but we stop
+    waiting on it and let the poll loop continue; the worker is a daemon
+    thread so an abandoned one never blocks process shutdown."""
+    box: dict = {}
+
+    def worker():
+        try:
+            box["value"] = run_action(action_type, params, cfg)
+        except Exception as exc:  # noqa: BLE001 -- surfaced to caller below
+            box["error"] = exc
+
+    thread = threading.Thread(target=worker, name="action", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"action '{action_type}' exceeded {timeout}s and was abandoned")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value", {})
 
 
 def _default_config_path() -> str:
@@ -87,6 +119,7 @@ def main():
     poll_interval = cfg.get("poll_interval_seconds", 10)
     oob_ip = cfg.get("oob_source_ip")
     token = cfg.get("token")
+    max_action_seconds = cfg.get("max_action_seconds", DEFAULT_MAX_ACTION_SECONDS)
 
     session = bound_session(oob_ip)
     if token:
@@ -142,7 +175,9 @@ def main():
 
                 start = datetime.utcnow()
                 try:
-                    side_effects = run_action(action["action_type"], action["params"], cfg)
+                    side_effects = _run_action_bounded(
+                        action["action_type"], action["params"], cfg, max_action_seconds
+                    )
                     status = "success"
                     error = None
                 except Exception as exc:  # noqa: BLE001 -- report, don't crash the agent
